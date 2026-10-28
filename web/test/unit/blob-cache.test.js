@@ -1,0 +1,252 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import { makeBlobCache, parseBlobRange, parseContentRange } from "../../public/js/blob-cache.js";
+
+const PIECE = 100;
+const bytesOf = (length, seed = 0) => Uint8Array.from({ length }, (_, i) => (i * 7 + seed) % 256);
+
+/**
+ * A server holding `blobs` (id → bytes) that answers ranges as the backend does, in parts of `part` bytes, recording
+ * every request. `hold()` makes its bodies wait until `release()`.
+ */
+function server(blobs, { part = 30 } = {}) {
+  const requests = [];
+  const delivered = { bytes: 0 };
+  let gate = null;
+  const fetchRange = async (id, start, end, signal) => {
+    requests.push([id, start, end]);
+    const blob = blobs[id];
+    if (!blob) return new Response(JSON.stringify({ error: "not_found" }), { status: 404 });
+    if (start >= blob.length) return new Response(null, { status: 416 });
+    const last = Math.min(end, blob.length - 1);
+    let at = start;
+    const body = new ReadableStream({
+      async pull(controller) {
+        if (gate) await gate.promise;
+        if (signal.aborted) return controller.error(signal.reason);
+        const next = Math.min(at + part, last + 1);
+        controller.enqueue(blob.slice(at, next));
+        delivered.bytes += next - at;
+        at = next;
+        if (at > last) controller.close();
+      },
+    });
+    return new Response(body, { status: 206, headers: { "Content-Range": `bytes ${start}-${last}/${blob.length}` } });
+  };
+  return {
+    fetchRange,
+    requests,
+    delivered,
+    hold: () => {
+      let release;
+      gate = { promise: new Promise((resolve) => (release = resolve)) };
+      return () => {
+        gate = null;
+        release();
+      };
+    },
+  };
+}
+
+const read = async (response) => new Uint8Array(await response.arrayBuffer());
+/** Let fetches that run on their own get on. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+test("Range and Content-Range headers", () => {
+  assert.deepEqual(parseBlobRange("bytes=0-99"), { start: 0, end: 99 });
+  assert.deepEqual(parseBlobRange("bytes=100-"), { start: 100, end: null });
+  for (const header of [null, "bytes=-5", "bytes=5-1", "bytes=0-1,4-5", "items=0-1"]) assert.equal(parseBlobRange(header), null, header);
+  assert.deepEqual(parseContentRange("bytes 0-99/1000"), { start: 0, end: 99, total: 1000 });
+  assert.equal(parseContentRange("bytes */1000"), null);
+});
+
+test("a read fetches its range rounded out to pieces, and answers with exactly the bytes asked for", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE });
+  const response = await cache.respond("a", "bytes=150-349");
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get("content-range"), "bytes 150-349/1000");
+  assert.equal(response.headers.get("content-length"), "200");
+  assert.deepEqual(await read(response), blob.subarray(150, 350));
+  assert.deepEqual(net.requests, [["a", 100, 399]]);
+  assert.deepEqual(cache.contents().a.pieces, [1, 2, 3]);
+});
+
+test("what is cached is answered without the server, and only what is missing is fetched", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE });
+  await read(await cache.respond("a", "bytes=0-299"));
+  assert.deepEqual(await read(await cache.respond("a", "bytes=50-250")), blob.subarray(50, 251));
+  assert.equal(net.requests.length, 1, "nothing new for cached bytes");
+  assert.deepEqual(await read(await cache.respond("a", "bytes=250-999")), blob.subarray(250, 1000));
+  assert.deepEqual(net.requests.slice(1), [["a", 300, 999]], "one request for the missing stretch");
+});
+
+test("the last piece is as long as the blob, and a range past the end is the server's to refuse", async () => {
+  const blob = bytesOf(250);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE });
+  assert.deepEqual(await read(await cache.respond("a", "bytes=180-")), blob.subarray(180));
+  assert.equal(await cache.respond("a", "bytes=250-"), null);
+  assert.equal(await cache.respond("a", "bytes=0-1,5-6"), null, "several ranges go to the server");
+  assert.equal(await cache.respond("missing", "bytes=0-9"), null, "so does a blob the server doesn't have");
+});
+
+test("a fetch runs to its end even when the read is cancelled: that is the read-ahead", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE });
+  const reader = (await cache.respond("a", "bytes=0-")).body.getReader();
+  await reader.read();
+  await reader.cancel();
+  await settle();
+  assert.deepEqual(cache.contents().a.pieces, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(await read(await cache.respond("a", "bytes=700-899")), blob.subarray(700, 900));
+  assert.equal(net.requests.length, 1);
+});
+
+test("another track playing stops this one's read-ahead, and keeps what it has", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob, b: bytesOf(500, 3) });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE });
+  const reader = (await cache.respond("a", "bytes=0-")).body.getReader();
+  await reader.read();
+  await reader.cancel();
+  const release = net.hold();
+  cache.focus("b");
+  release();
+  await settle();
+  const kept = cache.contents().a.pieces;
+  assert.ok(kept.length > 0 && kept.length < 10, `some pieces kept, not all fetched: ${kept}`);
+  assert.ok(net.delivered.bytes < 1000);
+  // What it has is still answered, and the rest is fetched when asked for.
+  assert.deepEqual(await read(await cache.respond("a", "bytes=0-99")), blob.subarray(0, 100));
+  assert.deepEqual(await read(await cache.respond("a", "bytes=900-999")), blob.subarray(900, 1000));
+});
+
+test("the track playing keeps reading ahead", async () => {
+  const net = server({ a: bytesOf(1000) });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE });
+  const reader = (await cache.respond("a", "bytes=0-")).body.getReader();
+  await reader.read();
+  await reader.cancel();
+  cache.focus("a");
+  await settle();
+  assert.deepEqual(cache.contents().a.pieces, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+});
+
+test("a read waits for the piece already on its way instead of fetching it again", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE });
+  await read(await cache.respond("a", "bytes=900-999")); // learns the size
+  const release = net.hold();
+  // A body fetches when it is read: start reading the long one, which then waits on the held server.
+  const first = (await cache.respond("a", "bytes=0-899")).body;
+  const firstBytes = read(new Response(first));
+  await settle();
+  const second = cache.respond("a", "bytes=10-49");
+  release();
+  assert.deepEqual(await read(await second), blob.subarray(10, 50));
+  assert.deepEqual(await firstBytes, blob.subarray(0, 900));
+  assert.deepEqual(net.requests, [["a", 900, 999], ["a", 0, 899]]);
+});
+
+test("a fetch stops where another one got first, so a seek ahead fetches nothing twice", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob }, { part: 10 });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE });
+  const release = net.hold();
+  const playing = cache.respond("a", "bytes=0-");
+  release();
+  const reader = (await playing).body.getReader();
+  await reader.read();
+  // Seek to the middle while the first fetch is still near the start.
+  const seek = await cache.respond("a", "bytes=500-");
+  assert.deepEqual(await read(seek), blob.subarray(500));
+  await reader.cancel();
+  await settle();
+  const fetched = net.requests.map(([, start, end]) => [start, end]);
+  assert.equal(fetched[1][0], 500, "the seek fetched from its own place");
+  assert.ok(net.delivered.bytes <= 1000 + 2 * 10, `nothing fetched twice, but for what was in flight (${net.delivered.bytes})`);
+  assert.deepEqual(cache.contents().a.pieces, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob, "and the bytes are right, from either fetch");
+});
+
+test("every byte from the server is counted, and none from the cache", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  let counted = 0;
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE, onBytes: (bytes) => (counted += bytes) });
+  await read(await cache.respond("a", "bytes=0-999"));
+  await read(await cache.respond("a", "bytes=0-999"));
+  assert.equal(counted, 1000);
+});
+
+test("a long read is fetched in stretches of at most fetchBytes", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE, fetchBytes: 300 });
+  assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob);
+  assert.deepEqual(net.requests, [["a", 0, 299], ["a", 300, 599], ["a", 600, 899], ["a", 900, 999]]);
+});
+
+test("at most maxBlobs blobs are kept, the least recently used going first", async () => {
+  const blobs = { a: bytesOf(300, 1), b: bytesOf(300, 2), c: bytesOf(300, 3), d: bytesOf(300, 4) };
+  const net = server(blobs);
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE, maxBlobs: 3 });
+  for (const id of ["a", "b", "c"]) await read(await cache.respond(id, "bytes=0-299"));
+  await read(await cache.respond("a", "bytes=0-9")); // a is used again: b is now the oldest
+  await read(await cache.respond("d", "bytes=0-299"));
+  assert.deepEqual(Object.keys(cache.contents()).sort(), ["a", "c", "d"]);
+});
+
+test("at most maxBytes are kept, the least recently used pieces going first", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE, maxBytes: 500 });
+  assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob, "a read longer than the cache still gets everything");
+  assert.deepEqual(cache.contents().a.pieces, [5, 6, 7, 8, 9]);
+});
+
+test("a server that fails mid-way fails the read, and the next read fetches again", async () => {
+  const blob = bytesOf(1000);
+  let broken = true;
+  const net = server({ a: blob });
+  const fetchRange = async (...args) => {
+    const response = await net.fetchRange(...args);
+    if (!broken) return response;
+    const reader = response.body.getReader();
+    let sent = 0;
+    const body = new ReadableStream({
+      async pull(controller) {
+        if (sent >= 150) return controller.error(new TypeError("network error"));
+        const { value } = await reader.read();
+        sent += value.length;
+        controller.enqueue(value);
+      },
+    });
+    return new Response(body, { status: 206, headers: response.headers });
+  };
+  const cache = makeBlobCache({ fetchRange, pieceSize: PIECE });
+  await assert.rejects(read(await cache.respond("a", "bytes=0-999")), /network error/);
+  assert.deepEqual(cache.contents().a.pieces, [0], "what arrived whole is kept");
+  broken = false;
+  assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob);
+});
+
+test("forget empties the cache and stops its fetches", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE });
+  const release = net.hold();
+  const pending = cache.respond("a", "bytes=0-");
+  release();
+  const reader = (await pending).body.getReader();
+  cache.forget();
+  await assert.rejects(reader.read(), /emptied/);
+  assert.deepEqual(cache.contents(), {});
+});

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Media</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/js/main.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Media</h1>
+      <nav>
+        <span id="traffic" class="muted" title="Bytes per second fetched from the server" hidden></span>
+        <button type="button" id="settings" hidden>Settings</button>
+        <button type="button" id="lock" hidden>Lock</button>
+      </nav>
+    </header>
+    <p id="usage" class="muted" title="Data sent to and received from the server"></p>
+    <p id="requests" class="muted" role="status" title="The requests to the server the work in progress has sent"></p>
+    <div id="warnings"></div>
+    <div id="banner"></div>
+    <main id="app"><p class="muted">Loading…</p></main>
+    <!-- Outside #app, so playback goes on while other screens show. -->
+    <footer id="player" hidden>
+      <div class="now">
+        <p id="now-playing"></p>
+        <button type="button" id="like" aria-label="Like" aria-pressed="false">♡</button>
+        <button type="button" id="dislike" aria-label="Dislike" aria-pressed="false">👎</button>
+      </div>
+      <input type="range" id="seek" min="0" max="0" step="any" value="0" aria-label="Position in the track" />
+      <div class="times"><span id="elapsed">0:00</span><span id="duration">0:00</span></div>
+      <div class="controls">
+        <button type="button" id="shuffle" aria-label="Shuffle" aria-pressed="false">🔀</button>
+        <button type="button" id="previous" aria-label="Previous track">⏮</button>
+        <button type="button" id="play-pause" class="primary" aria-label="Play">▶</button>
+        <button type="button" id="next" aria-label="Next track">⏭</button>
+        <button type="button" id="repeat" aria-label="Repeat: off" aria-pressed="false" data-mode="off">🔁</button>
+      </div>
+      <!-- Plays, without controls of its own: the ones above drive it. -->
+      <audio id="audio" preload="metadata"></audio>
+    </footer>
+  </body>
+</html>

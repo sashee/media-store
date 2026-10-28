@@ -1,0 +1,412 @@
+:root {
+  --gap: 0.75rem;
+  --radius: 6px;
+  --border: color-mix(in srgb, currentColor 20%, transparent);
+  --muted: color-mix(in srgb, currentColor 60%, transparent);
+  --accent: #2563eb;
+  --danger: #dc2626;
+  font-family: system-ui, sans-serif;
+  line-height: 1.4;
+}
+
+body {
+  margin: 0 auto;
+  max-width: 64rem;
+  padding: var(--gap);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+h1 {
+  font-size: 1.25rem;
+  margin: 0.25rem 0;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin-top: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+input,
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+}
+
+label {
+  display: block;
+  margin-bottom: var(--gap);
+}
+
+label.check {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+label.check input {
+  width: auto;
+}
+
+.inline {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  margin: var(--gap) 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: var(--gap) 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.banner {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 0.5rem var(--gap);
+}
+
+.banner.notice {
+  border-color: var(--accent);
+}
+
+.banner.warn {
+  border-color: #d97706;
+  background: color-mix(in srgb, #d97706 10%, transparent);
+}
+
+header nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+code.wrap {
+  word-break: break-all;
+}
+
+.passkeys,
+.report {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.passkeys li {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.badges {
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.badge {
+  font-size: 0.75rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.badge.warn {
+  border-color: #d97706;
+}
+
+.recovery-key {
+  display: block;
+  word-break: break-all;
+  font-size: 1.1rem;
+  padding: var(--gap);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.5rem;
+  margin: var(--gap) 0;
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rows li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.rows li.playing {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.row-main {
+  flex: 1;
+  border: none;
+  background: none;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.row-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.row-actions button {
+  font-size: 0.8rem;
+}
+
+.field {
+  margin-bottom: var(--gap);
+}
+
+.field .label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.field .value {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+progress {
+  width: 100%;
+}
+
+
+/* The player, at the bottom of the window whatever the screen. */
+main {
+  padding-bottom: 10rem;
+}
+
+#player {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.5rem 1rem;
+  background: Canvas;
+  border-top: 1px solid var(--border);
+}
+
+#player p {
+  margin: 0;
+  font-weight: bold;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#player .now {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#player .now p {
+  flex: 1;
+}
+
+#player #like,
+#player #dislike {
+  border: none;
+  font-size: 1.2rem;
+  padding: 0 0.25rem;
+}
+
+/* Faint until the track is disliked. */
+#player #dislike {
+  opacity: 0.35;
+}
+
+#player #dislike[aria-pressed="true"] {
+  background: none;
+  opacity: 1;
+}
+
+#player #like[aria-pressed="true"] {
+  background: none;
+  color: var(--danger);
+}
+
+#seek {
+  display: block;
+  width: 100%;
+  margin: 0.5rem 0 0;
+  accent-color: var(--accent);
+}
+
+#player .times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+#player .controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 1rem;
+}
+
+#play-pause {
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 50%;
+  font-size: 1.3rem;
+}
+
+/* An "on" toggle: tinted, so it doesn't read as the play button. */
+#player button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  border-color: var(--accent);
+}
+
+#traffic {
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.5rem;
+}
+
+/* A folder picked with the File System Access picker (SPEC §7.1), shown as a file input is, and both inputs' buttons
+   alike. */
+.file-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+input[type="file"]::file-selector-button,
+.file-picker button {
+  font: inherit;
+  padding: 0.1rem 0.5rem;
+  margin-right: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  color: inherit;
+}
+
+.file-picker button {
+  margin-right: 0;
+}
+
+/* The traffic and request counters (SPEC §7.1). The request line is kept while empty, so nothing below moves when it
+   shows. */
+#usage,
+#requests {
+  min-height: 1.3em;
+  margin: 0 0 0.25rem;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The browser and the upload preview (SPEC §7.1) */
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: var(--gap);
+}
+
+.breadcrumbs .crumb + .crumb::before {
+  content: "/ ";
+  color: var(--muted);
+}
+
+.rows li > .muted,
+.rows li > .target {
+  flex-basis: 100%;
+  font-size: 0.85rem;
+}
+
+.target {
+  color: var(--accent);
+}
+
+h3 {
+  font-size: 1rem;
+  margin: var(--gap) 0 0.25rem;
+}
+
+.album-form {
+  flex-basis: 100%;
+}
+
+.album-form .actions {
+  margin-bottom: 0;
+}
+
+#upload-rows li.unused,
+#upload-rows li.missing {
+  opacity: 0.6;
+}

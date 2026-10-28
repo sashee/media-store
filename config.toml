@@ -1,0 +1,10 @@
+# Local development settings (backend SPEC §10). Every key can be overridden with BACKEND_<KEY>.
+socket = "./data/backend.sock"
+database = "./data/backend.sqlite3"
+static_dir = "./web/public"
+public_hosts = []
+rp_name = "Media"
+# Tracks are single blobs, sealed and padded: room for long ones.
+max_blob_size = "256MiB"
+# A session ends this long after the unlock, playing or not: a day of listening per unlock.
+session_ttl = "24h"

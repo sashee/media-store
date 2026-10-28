@@ -1,0 +1,5 @@
+/data/
+__pycache__/
+/result*
+# The development link to the SDK (`make deps`)
+/web/public/sdk
