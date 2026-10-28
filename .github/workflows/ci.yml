@@ -45,7 +45,8 @@ jobs:
         uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31.10.7
 
       # Both packages and every check, in the Nix sandbox: e2ee-store's Rust suite (in the backend's build), the
-      # frontend's unit tests, the browser test (Chromium with a PRF-capable virtual authenticator, playing a track),
-      # the NixOS module in a VM, and the e2ee-store checks this repository reruns. The same as `make check` locally.
+      # frontend's unit tests, the browser tests (Chromium with a PRF-capable virtual authenticator: playback, upload,
+      # library), the NixOS module in a VM, and the e2ee-store checks this repository reruns (its SDK's unit and browser
+      # tests, its S3 VM test). The same as `make check` locally.
       - name: Build and test
         run: make check

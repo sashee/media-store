@@ -5,7 +5,7 @@
 #   nix-build nix -A sdk                   # e2ee-store's SDK and browser-test harness
 #   nix-build nix -A web                   # the frontend's static files, with the SDK inside
 #   nix-build nix -A checks.web-unit       # the frontend's unit tests
-#   nix-build nix -A checks.e2e-playback   # a browser test (also e2e-upload)
+#   nix-build nix -A checks.e2e-playback   # a browser test (also e2e-upload, e2e-library)
 #   nix-build nix -A checks.vm             # the NixOS module (./module.nix) in a VM
 #   nix-build nix -A checks.e2ee-store-sdk-unit   # e2ee-store's checks an app reruns (also e2ee-store-browser,
 #                                                 # e2ee-store-vm-s3)

@@ -23,7 +23,7 @@ PORT ?= 8081
 
 .PHONY: all check package deps test test-web e2e run iroh user setup-token
 
-# Everything, hermetic: both packages, the frontend's unit tests, the browser test, the VM test, and the e2ee-store
+# Everything, hermetic: both packages, the frontend's unit tests, the browser tests, the VM test, and the e2ee-store
 # checks this repository reruns (its SDK's tests and its S3 VM test), in the Nix sandbox. This is what CI runs.
 all: check
 
