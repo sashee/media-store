@@ -45,8 +45,8 @@ to paste into the app. The app has no address bar, so paste the setup token on t
 
 ## Deployment
 
-`nix/module.nix` is a plain NixOS module (no flake): the `media-store` instance of e2ee-store's module. The packages
-are built with the host's own nixpkgs:
+`nix/module.nix` is a plain NixOS module (no flake), with the backend from the e2ee-store version it pins. The
+packages are built with the host's own nixpkgs:
 
 ```nix
 imports = [ "${media-store}/nix/module.nix" ];
@@ -58,8 +58,8 @@ The backend listens on `/run/media-store/backend.sock`. Only members of the `med
 whatever exposes it (`iroh-uds-listen`, a reverse proxy) joins that group. The data is in `/var/lib/media-store`.
 Uploads may be up to 256 MiB (`max_blob_size`), and a session lasts 24 hours (`session_ttl`), so music doesn't stop
 for a new unlock every 4 hours, the backend's default. Tracks are offloadable, so a storage backend
-(`services.e2ee-store.instances.media-store.storageBackends`, with `blob_target`) can keep them outside the database,
-or keep copies in several places.
+(`services.media-store.storageBackends`, with `settings.blob_target`) can keep them outside the database, or keep
+copies in several places.
 Run admin commands as root through the wrapper, which switches to the service user: `sudo media-store user create
 alice`.
 
