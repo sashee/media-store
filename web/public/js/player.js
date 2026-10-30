@@ -15,7 +15,7 @@ export async function startPlayback({ respond, onError, onTraffic = () => {} }) 
   if (!("serviceWorker" in navigator)) throw new Error("This browser can't play tracks: it doesn't support Service Workers.");
   const container = navigator.serviceWorker;
   container.addEventListener("message", (event) => {
-    if (event.data?.type === "play" && event.ports[0]) answer(event.data, event.ports[0], { respond, onError });
+    if (event.data?.type === "play" && event.ports[0]) answer(event.data, event.ports, { respond, onError });
     if (event.data?.type === "traffic" && Number.isSafeInteger(event.data.bytes)) onTraffic(event.data.bytes);
   });
   container.startMessages();
@@ -53,8 +53,13 @@ export function playingNow(id) {
   navigator.serviceWorker?.controller?.postMessage({ type: "playing", id });
 }
 
-/** Answers a play URL over `port`: status, headers and the body, which moves to the worker as a stream. */
-async function answer({ url, range }, port, { respond, onError }) {
+/**
+ * Answers a play URL over the first port: status, headers and the body, which moves to the worker as a stream. The
+ * second, from a worker that has one, hears at once that this page is on it: the answer can then wait for the bytes
+ * as long as the cache tries for them (sw.js).
+ */
+async function answer({ url, range }, [port, working], { respond, onError }) {
+  working?.postMessage("working");
   // Which play URL failed goes with it: a track left behind failing is no news (main.js).
   const report = (message) => onError(message, url);
   let response;

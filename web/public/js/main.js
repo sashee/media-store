@@ -390,6 +390,16 @@ audio.addEventListener("error", () => {
   if (next) play(next).catch(showError);
   else failedInARow = 0;
 });
+// After a network error, the browser loads no more of the track: it is paused, so the buttons offer to play it, and
+// playing it again loads it again where it stopped. The worker's cache tries for a long time first
+// (js/blob-cache.js), so this is after a long outage.
+audio.addEventListener("error", () => audio.error?.code === MediaError.MEDIA_ERR_NETWORK && audio.pause());
+audio.addEventListener("play", () => {
+  const track = playingTrack();
+  if (!track || audio.error?.code !== MediaError.MEDIA_ERR_NETWORK) return;
+  load(track, { at: audio.currentTime });
+  audio.play().catch(() => {});
+});
 connectPlayerBar(audio, {
   seek: document.getElementById("seek"),
   elapsed: document.getElementById("elapsed"),

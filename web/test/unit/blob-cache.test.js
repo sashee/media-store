@@ -212,7 +212,7 @@ test("at most maxBytes are kept, the least recently used pieces going first", as
   assert.deepEqual(cache.contents().a.pieces, [5, 6, 7, 8, 9]);
 });
 
-test("a server that fails mid-way fails the read, and the next read fetches again", async () => {
+test("a fetch that gives up fails the read, and the next read fetches again", async () => {
   const blob = bytesOf(1000);
   let broken = true;
   const net = server({ a: blob });
@@ -231,7 +231,7 @@ test("a server that fails mid-way fails the read, and the next read fetches agai
     });
     return new Response(body, { status: 206, headers: response.headers });
   };
-  const cache = makeBlobCache({ fetchRange, pieceSize: PIECE });
+  const cache = makeBlobCache({ fetchRange, pieceSize: PIECE, pauses: [] });
   await assert.rejects(read(await cache.respond("a", "bytes=0-999")), /network error/);
   assert.deepEqual(cache.contents().a.pieces, [0], "what arrived whole is kept");
   broken = false;
@@ -249,4 +249,113 @@ test("forget empties the cache and stops its fetches", async () => {
   cache.forget();
   await assert.rejects(reader.read(), /emptied/);
   assert.deepEqual(cache.contents(), {});
+});
+
+/**
+ * `net`'s fetchRange, failing as `plan` says, one entry per request: "drop" (a network error), "break" (a body that
+ * breaks off after 150 bytes), "short" (one that ends there), "stall" (one that sends nothing until aborted), a status,
+ * or nothing (as the server answers).
+ */
+function failing(net, plan) {
+  return async (id, start, end, signal) => {
+    const how = plan.shift();
+    if (how === "drop") throw new TypeError("Failed to fetch");
+    if (typeof how === "number") return new Response("", { status: how });
+    if (how === "stall") {
+      net.requests.push([id, start, end]);
+      const body = new ReadableStream({ start: (controller) => signal.addEventListener("abort", () => controller.error(signal.reason)) });
+      return new Response(body, { status: 206, headers: { "Content-Range": `bytes ${start}-${end}/1000` } });
+    }
+    const response = await net.fetchRange(id, start, end, signal);
+    if (!how) return response;
+    const reader = response.body.getReader();
+    let sent = 0;
+    const body = new ReadableStream({
+      async pull(controller) {
+        if (sent >= 150) return how === "break" ? controller.error(new TypeError("network error")) : controller.close();
+        const { value } = await reader.read();
+        sent += value.length;
+        controller.enqueue(value);
+      },
+    });
+    return new Response(body, { status: 206, headers: response.headers });
+  };
+}
+
+const PAUSES = [1, 1];
+
+test("a fetch that breaks off is made again from the piece it was at, and the read doesn't notice", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: failing(net, ["break"]), pieceSize: PIECE, pauses: PAUSES });
+  assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob);
+  assert.deepEqual(net.requests, [["a", 0, 999], ["a", 100, 999]], "piece 0 had come whole; piece 1 is fetched again");
+});
+
+test("no network, 502–504 and a body that ends early are made again too", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: failing(net, ["drop", 502, 503, 504, "short"]), pieceSize: PIECE, pauses: [1, 1, 1, 1, 1] });
+  cache.focus("a");
+  assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob);
+  assert.deepEqual(net.requests, [["a", 0, 999], ["a", 100, 999]]);
+});
+
+test("a fetch that stalls is made again", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const cache = makeBlobCache({ fetchRange: failing(net, ["stall"]), pieceSize: PIECE, pauses: PAUSES, stallMs: 30 });
+  assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob);
+  assert.deepEqual(net.requests, [["a", 0, 999], ["a", 0, 999]]);
+});
+
+test("the track playing keeps trying; any other blob gives up after the last pause", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob, b: blob });
+  const plan = Array(10).fill("drop");
+  const cache = makeBlobCache({ fetchRange: failing(net, plan), pieceSize: PIECE, pauses: PAUSES });
+  assert.equal(await cache.respond("b", "bytes=0-999"), null, "the server as it is, then");
+  assert.equal(plan.length, 10 - (PAUSES.length + 1));
+  cache.focus("a");
+  assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob, "after every drop left in the plan");
+  assert.equal(plan.length, 0);
+});
+
+test("another track playing, or forget, ends the retries", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  let attempts = 0;
+  const fetchRange = async () => {
+    attempts += 1;
+    throw new TypeError("Failed to fetch");
+  };
+  const cache = makeBlobCache({ fetchRange, pieceSize: PIECE, pauses: PAUSES });
+  cache.focus("a");
+  const reading = cache.respond("a", "bytes=0-999");
+  await settle();
+  cache.focus("b");
+  assert.equal(await reading, null);
+  const after = attempts;
+  await settle();
+  assert.equal(attempts, after, "nothing is tried after");
+
+  cache.focus("a");
+  const again = cache.respond("a", "bytes=0-999");
+  await settle();
+  cache.forget();
+  assert.equal(await again, null);
+  assert.equal(net.requests.length, 0);
+});
+
+test("a refusal isn't made again: a missing blob, a range not asked for", async () => {
+  const net = server({});
+  let requests = 0;
+  const cache = makeBlobCache({ fetchRange: (...args) => (requests++, net.fetchRange(...args)), pieceSize: PIECE, pauses: PAUSES });
+  cache.focus("a");
+  assert.equal(await cache.respond("a", "bytes=0-99"), null);
+  assert.equal(requests, 1);
+  const wrong = makeBlobCache({ fetchRange: async () => (requests++, new Response("", { status: 206, headers: { "Content-Range": "bytes 50-99/1000" } })), pieceSize: PIECE, pauses: PAUSES });
+  wrong.focus("a");
+  assert.equal(await wrong.respond("a", "bytes=0-99"), null);
+  assert.equal(requests, 2);
 });

@@ -9,7 +9,7 @@ export function clock(seconds) {
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`;
 }
 
-/** Wires the controls to `audio`. `onError` gets a play() the browser refuses. */
+/** Wires the controls to `audio`. `onError` gets a play() the browser refuses; not one a new load interrupts. */
 export function connectPlayerBar(audio, { seek, elapsed, duration, playPause, onError }) {
   // While the bar is dragged, it shows where it would go; the track seeks once it is let go, not at every step.
   let dragging = false;
@@ -35,7 +35,7 @@ export function connectPlayerBar(audio, { seek, elapsed, duration, playPause, on
     audio.currentTime = Number(seek.value);
     showTime();
   });
-  playPause.addEventListener("click", () => (audio.paused ? audio.play().catch(onError) : audio.pause()));
+  playPause.addEventListener("click", () => (audio.paused ? audio.play().catch((error) => error?.name === "AbortError" || onError(error)) : audio.pause()));
   showTime();
   showPlaying();
 }

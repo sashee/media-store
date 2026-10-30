@@ -9,7 +9,10 @@
 
 import { makeBlobCache } from "./js/blob-cache.js";
 
-/** How long a page has to answer for a play URL. */
+/**
+ * How long a page has to take a play URL on (js/player.js): to say it is working on it, or to answer. Once it has said
+ * so, the answer may take as long as the bytes do, e.g. while the cache tries again (js/blob-cache.js).
+ */
 const ANSWER_TIMEOUT_MS = 10_000;
 /** How often the pages hear how many bytes came from the server, while some do (the traffic counter). */
 const TRAFFIC_EVERY_MS = 500;
@@ -75,13 +78,21 @@ async function play(request, clientId) {
   return new Response(answer.body, { status: answer.status, headers: answer.headers });
 }
 
-/** Posts `message` to `client` and waits for its answer: null if there is none in time. */
+/**
+ * Posts `message` to `client` and waits for its answer: null if, in time, it neither answers nor says on the second
+ * port that it is working on it. A page from before that port answers in time or not at all.
+ */
 function ask(client, message) {
   const channel = new MessageChannel();
+  const working = new MessageChannel();
   const answer = new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ANSWER_TIMEOUT_MS);
     channel.port1.onmessage = (event) => resolve(event.data);
-    setTimeout(() => resolve(null), ANSWER_TIMEOUT_MS);
+    working.port1.onmessage = () => clearTimeout(timer);
   });
-  client.postMessage(message, [channel.port2]);
-  return answer.finally(() => channel.port1.close());
+  client.postMessage(message, [channel.port2, working.port2]);
+  return answer.finally(() => {
+    channel.port1.close();
+    working.port1.close();
+  });
 }

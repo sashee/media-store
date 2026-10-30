@@ -9,7 +9,7 @@ const supported = () => "mediaSession" in navigator;
 /**
  * Connects the <audio> element to the Media Session: its state and position go out, and the system's buttons come in.
  * `onPrevious`, `onNext` and `onStop` are the app's; play, pause and seeking act on the element. `onError` gets what
- * fails, e.g. a play() the browser refuses.
+ * fails, e.g. a play() the browser refuses; not one a new load interrupts.
  */
 export function connectMediaSession(audio, { onPrevious, onNext, onStop, onError }) {
   if (!supported()) return;
@@ -19,7 +19,7 @@ export function connectMediaSession(audio, { onPrevious, onNext, onStop, onError
     audio.currentTime = clamp(time);
   };
   const handlers = {
-    play: () => audio.play().catch(onError),
+    play: () => audio.play().catch((error) => error?.name === "AbortError" || onError(error)),
     pause: () => audio.pause(),
     stop: onStop,
     previoustrack: onPrevious,

@@ -8,8 +8,21 @@
 // what reads the current track ahead: <audio> asks for the rest of the track. It stops early where another fetch has
 // got to first, and when another track plays (`focus`): reading ahead a track left behind fetches for nothing. At most
 // `maxBlobs` blobs and `maxBytes` bytes are kept, the least recently used going first.
+//
+// A fetch that fails in a way that may pass (no network, 502–504, a body that breaks off or stalls) is made again after
+// a pause, from the piece it was at: its readers wait meanwhile, so <audio> stalls rather than fails. The track playing
+// keeps trying until another plays; any other blob gives up after the last pause.
 
 export const PIECE_SIZE = 256 * 1024;
+
+/** The pauses before each further attempt of a fetch; the track playing goes on at the last. */
+export const RETRY_PAUSES_MS = [500, 1000, 2000, 4000, 8000, 10_000];
+
+/** How long a fetch may go without a byte before it counts as stalled, and is made again. */
+export const STALL_MS = 20_000;
+
+/** What may pass: no way through to the server, its storage out of reach, a timeout. */
+const PASSING = new Set([502, 503, 504]);
 
 /** One stretch of `Range: bytes=a-b` or `bytes=a-`, as { start, end } (end inclusive, null to the end); null otherwise. */
 export function parseBlobRange(header) {
@@ -34,16 +47,46 @@ class Gone extends Error {
   }
 }
 
+/** A failure that may pass: the fetch is made again. A network error (a TypeError) is one too. */
+class Passing extends Error {}
+
+/** Waits `ms`, or rejects with the signal's reason when it is aborted first. */
+function pause(ms, signal) {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const aborted = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", aborted);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", aborted, { once: true });
+  });
+}
+
 /**
  * The cache. `fetchRange(id, start, end, signal)` fetches bytes [start, end] of blob `id` from the server (a Response);
- * `onBytes(n)` hears of every n bytes that came from it.
+ * `onBytes(n)` hears of every n bytes that came from it. `pauses` and `stallMs` are for retries; no pauses, none.
  * → { respond(id, rangeHeader) → Response | null, focus(id), forget() }. A null response means the cache can't answer
  * this request (another kind of range, a blob that isn't there, the server saying no): the request goes to the server
  * as it is.
  */
-export function makeBlobCache({ fetchRange, onBytes = () => {}, pieceSize = PIECE_SIZE, maxBlobs = 3, maxBytes = 100 * MiB, fetchBytes = 32 * MiB }) {
+export function makeBlobCache({
+  fetchRange,
+  onBytes = () => {},
+  pieceSize = PIECE_SIZE,
+  maxBlobs = 3,
+  maxBytes = 100 * MiB,
+  fetchBytes = 32 * MiB,
+  pauses = RETRY_PAUSES_MS,
+  stallMs = STALL_MS,
+}) {
   // id → { size, pieces: Map<index, { bytes, used }>, claims: Map<index, deferred>, fetches: Set<AbortController>, used }
   const blobs = new Map();
+  // The blob playing now (`focus`): its fetches keep trying.
+  let playing = null;
   let clock = 0;
   const tick = () => ++clock;
 
@@ -104,13 +147,12 @@ export function makeBlobCache({ fetchRange, onBytes = () => {}, pieceSize = PIEC
 
   /**
    * Fetches pieces [first, last] of `blob` (or up to `fetchBytes` of them), storing each as it completes, and stops
-   * early at a piece some other fetch has. Resolves once the server has answered, with its Content-Range; rejects
-   * when it didn't answer with the bytes asked for.
+   * early at a piece some other fetch has. Made again from the piece it was at after a failure that may pass. Resolves
+   * once the server has answered with the bytes asked for; rejects when it didn't, or the fetch gave up first.
    */
   function fetchPieces(id, blob, first, last) {
     const limit = Math.min(last ?? Infinity, first + Math.floor(fetchBytes / pieceSize) - 1);
-    const startByte = first * pieceSize;
-    const endByte = (blob.size === null ? (limit + 1) * pieceSize : Math.min((limit + 1) * pieceSize, blob.size)) - 1;
+    const endByte = () => (blob.size === null ? (limit + 1) * pieceSize : Math.min((limit + 1) * pieceSize, blob.size)) - 1;
     const controller = new AbortController();
     blob.fetches.add(controller);
     // The piece being read, and its claim: what waiting readers get when the fetch fails.
@@ -121,20 +163,34 @@ export function makeBlobCache({ fetchRange, onBytes = () => {}, pieceSize = PIEC
       if (current && blob.claims.get(currentIndex) === current) blob.claims.delete(currentIndex);
       current = null;
     };
+    let answer;
+    const answered = new Promise((resolve, reject) => (answer = { resolve, reject }));
+    answered.catch(() => {});
 
-    const answered = (async () => {
-      const response = await fetchRange(id, startByte, endByte, controller.signal);
-      const range = response.status === 206 ? parseContentRange(response.headers.get("content-range")) : null;
-      if (!range || range.start !== startByte || (blob.size !== null && range.total !== blob.size)) {
-        await response.body?.cancel().catch(() => {});
-        throw new Error(`The server answered ${response.status} for a range of blob ${id}`);
-      }
-      blob.size = range.total;
-      return { response, range };
-    })();
-
-    const done = answered
-      .then(async ({ response, range }) => {
+    /** One request, from piece `currentIndex` to the end or to where another fetch got first. */
+    async function attempt() {
+      const startByte = currentIndex * pieceSize;
+      const stalled = new AbortController();
+      const signal = AbortSignal.any([controller.signal, stalled.signal]);
+      let timer;
+      const watch = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => stalled.abort(new Passing(`Blob ${id} stalled`)), stallMs);
+      };
+      watch();
+      try {
+        const response = await fetchRange(id, startByte, endByte(), signal);
+        if (PASSING.has(response.status)) {
+          await response.body?.cancel().catch(() => {});
+          throw new Passing(`The server answered ${response.status} for a range of blob ${id}`);
+        }
+        const range = response.status === 206 ? parseContentRange(response.headers.get("content-range")) : null;
+        if (!range || range.start !== startByte || (blob.size !== null && range.total !== blob.size)) {
+          await response.body?.cancel().catch(() => {});
+          throw new Error(`The server answered ${response.status} for a range of blob ${id}`);
+        }
+        blob.size = range.total;
+        answer.resolve(range);
         const reader = response.body.getReader();
         let buffered = [];
         let length = 0;
@@ -143,7 +199,8 @@ export function makeBlobCache({ fetchRange, onBytes = () => {}, pieceSize = PIEC
           const need = sizeOfPiece(blob, currentIndex);
           while (length < need) {
             const { value, done: ended } = await reader.read();
-            if (ended) throw new Error(`Blob ${id} ended early`);
+            if (ended) throw new Passing(`Blob ${id} ended early`);
+            watch();
             onBytes(value.length);
             buffered.push(value);
             length += value.length;
@@ -156,15 +213,39 @@ export function makeBlobCache({ fetchRange, onBytes = () => {}, pieceSize = PIEC
           const next = currentIndex + 1;
           if (next > lastIndex || owned(blob, next) || !blobs.has(id)) {
             await reader.cancel().catch(() => {});
-            controller.abort();
             return;
           }
           currentIndex = next;
           current = claim(blob, next);
         }
+      } catch (error) {
+        // A stall shows up as the request's abort, with the stall as its reason.
+        throw stalled.signal.aborted && !controller.signal.aborted ? stalled.signal.reason : error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    const done = (async () => {
+      for (let failures = 0; ; failures++) {
+        try {
+          return await attempt();
+        } catch (error) {
+          const passing = (error instanceof Passing || error instanceof TypeError) && !controller.signal.aborted;
+          const patient = playing === id || failures < pauses.length;
+          if (!passing || !patient || pauses.length === 0 || !blobs.has(id)) throw error;
+          await pause(pauses[Math.min(failures, pauses.length - 1)], controller.signal);
+        }
+      }
+    })()
+      .catch((error) => {
+        answer.reject(error);
+        fail(error);
       })
-      .catch(fail)
-      .finally(() => blob.fetches.delete(controller));
+      .finally(() => {
+        controller.abort();
+        blob.fetches.delete(controller);
+      });
 
     return { answered, done };
   }
@@ -231,10 +312,12 @@ export function makeBlobCache({ fetchRange, onBytes = () => {}, pieceSize = PIEC
    * Blob `id` is the one playing now (null: none is): every other blob's fetches stop, as reading those ahead is for
    * nothing. What they fetched stays, for going back; a read of the rest fetches it again.
    */
-  const focus = (id) =>
+  const focus = (id) => {
+    playing = id;
     blobs.forEach((blob, other) => {
       if (other !== id) blob.fetches.forEach((controller) => controller.abort(new Gone("Another track plays")));
     });
+  };
 
   /** What is cached, for tests: { id: { size, pieces: [index…] } }. */
   const contents = () => Object.fromEntries([...blobs].map(([id, blob]) => [id, { size: blob.size, pieces: [...blob.pieces.keys()].sort((a, b) => a - b) }]));
