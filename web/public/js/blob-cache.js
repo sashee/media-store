@@ -67,15 +67,15 @@ function pause(ms, signal) {
 }
 
 /**
- * The cache. `fetchRange(id, start, end, signal)` fetches bytes [start, end] of blob `id` from the server (a Response);
- * `onBytes(n)` hears of every n bytes that came from it. `pauses` and `stallMs` are for retries; no pauses, none.
+ * The cache. `fetchRange(id, start, end, signal, retry)` fetches bytes [start, end] of blob `id` from the server (a
+ * Response); `retry` is how many attempts of the same fetch came before. `pauses` and `stallMs` are for retries; no
+ * pauses, none.
  * → { respond(id, rangeHeader) → Response | null, focus(id), forget() }. A null response means the cache can't answer
  * this request (another kind of range, a blob that isn't there, the server saying no): the request goes to the server
  * as it is.
  */
 export function makeBlobCache({
   fetchRange,
-  onBytes = () => {},
   pieceSize = PIECE_SIZE,
   maxBlobs = 3,
   maxBytes = 100 * MiB,
@@ -167,8 +167,8 @@ export function makeBlobCache({
     const answered = new Promise((resolve, reject) => (answer = { resolve, reject }));
     answered.catch(() => {});
 
-    /** One request, from piece `currentIndex` to the end or to where another fetch got first. */
-    async function attempt() {
+    /** One request, from piece `currentIndex` to the end or to where another fetch got first; `retry` came before. */
+    async function attempt(retry) {
       const startByte = currentIndex * pieceSize;
       const stalled = new AbortController();
       const signal = AbortSignal.any([controller.signal, stalled.signal]);
@@ -179,7 +179,7 @@ export function makeBlobCache({
       };
       watch();
       try {
-        const response = await fetchRange(id, startByte, endByte(), signal);
+        const response = await fetchRange(id, startByte, endByte(), signal, retry);
         if (PASSING.has(response.status)) {
           await response.body?.cancel().catch(() => {});
           throw new Passing(`The server answered ${response.status} for a range of blob ${id}`);
@@ -201,7 +201,6 @@ export function makeBlobCache({
             const { value, done: ended } = await reader.read();
             if (ended) throw new Passing(`Blob ${id} ended early`);
             watch();
-            onBytes(value.length);
             buffered.push(value);
             length += value.length;
           }
@@ -229,7 +228,7 @@ export function makeBlobCache({
     const done = (async () => {
       for (let failures = 0; ; failures++) {
         try {
-          return await attempt();
+          return await attempt(failures);
         } catch (error) {
           const passing = (error instanceof Passing || error instanceof TypeError) && !controller.signal.aborted;
           const patient = playing === id || failures < pauses.length;

@@ -115,7 +115,7 @@ export function enterRecoveryKey({ intro, onSubmit, onError }) {
 
 // ---------------------------------------------------------------- settings (e2ee-store/sdk/SPEC.md §6.6–§6.11)
 
-export function settings({ host, passkeys, slots, lastCleanup, onAddPasskey, onSetUp, onDeletePasskey, onAddDevice, onReplaceRecoveryKey, onTestRecoveryKey, onResort, onCleanup, onCheckDuplicates, onBack, onError }) {
+export function settings({ host, passkeys, slots, lastCleanup, requestDetails, onRequestDetails, onAddPasskey, onSetUp, onDeletePasskey, onAddDevice, onReplaceRecoveryKey, onTestRecoveryKey, onResort, onCleanup, onCheckDuplicates, onBack, onError }) {
   const canUnlockCount = passkeys.filter((p) => slots.includes(p.id)).length;
   const passkeyRow = (p) => {
     const canUnlock = slots.includes(p.id);
@@ -169,6 +169,16 @@ export function settings({ host, passkeys, slots, lastCleanup, onAddPasskey, onS
       h("div", { class: "actions" }, actionButton("Clean up now", onCleanup, onError, { id: "cleanup" })),
       h("p", {}, "Check for duplicates looks for files stored more than once: the same bytes in two places that don't share their storage."),
       h("div", { class: "actions" }, actionButton("Check for duplicates", onCheckDuplicates, onError, { id: "check-duplicates" })),
+    ),
+    section(
+      "Requests",
+      h("p", {}, "Under the header, the requests to the server are counted while there are any. They can be listed instead, one per line: what each one reads, and how it goes."),
+      h(
+        "label",
+        { class: "check" },
+        h("input", { type: "checkbox", id: "request-details", checked: requestDetails, onchange: (e) => onRequestDetails(e.target.checked) }),
+        "List each request",
+      ),
     ),
   );
 }

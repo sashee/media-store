@@ -24,7 +24,7 @@ import { offer, readWhole } from "./saving.js";
 import { rangeResponse } from "./ranges.js";
 import { connectMediaSession, showTrack } from "./media-session.js";
 import { after, nextRepeat, previous, queueOf, REPEAT_MODES, shuffleOrder, skipping, statusLine } from "./queue.js";
-import { formatRate, formatUsage, metering, MINUTE_MS, plus, rate, recent, total } from "./traffic.js";
+import { formatRate, formatUsage, MINUTE_MS, plus, rate, recent, sampleOf, total } from "./traffic.js";
 import * as requestCounter from "./requests.js";
 import { h, replaceChildren } from "./ui/dom.js";
 import { connectPlayerBar } from "./ui/player-bar.js";
@@ -113,7 +113,7 @@ const playback = startPlayback({
   onError: (text, url) => {
     if (playUrlBlob(url) === playingTrack()?.id) showError(new UserFacingError(`Can't play this track: ${text}`));
   },
-  onTraffic: (bytes) => record({ at: Date.now(), down: bytes, up: 0 }),
+  onRequests: (events) => events.forEach(heard),
 });
 // Reported when a track is played.
 playback.catch(() => {});
@@ -432,17 +432,53 @@ function record(sample) {
   started = plus(started, [sample]);
 }
 
-/** The server's requests of the work in progress (requests.js). */
+/** The requests to the server of the work in progress, the page's and the worker's (requests.js). */
 let requests = requestCounter.NONE;
 const requestsView = document.getElementById("requests");
-const showRequests = () => (requestsView.textContent = requestCounter.describe(requests, Date.now()) ?? "");
 
-// Every request the page makes goes through `fetch`, the SDK's too: counted there, and its bytes metered.
-globalThis.fetch = requestCounter.counting(metering(globalThis.fetch.bind(globalThis), { base: location.href, now: Date.now, onData: record }), {
+/** Whether the request counter lists each request instead of counting them (Settings): remembered on this device. */
+const DETAILS_KEY = "media-store/request-details";
+let requestDetails = remembered.get(DETAILS_KEY) === true;
+
+function showRequests() {
+  const now = Date.now();
+  requestsView.classList.toggle("details", requestDetails);
+  if (!requestDetails) {
+    requestsView.textContent = requestCounter.describe(requests, now) ?? "";
+    return;
+  }
+  const { lines, more } = requestCounter.lines(requests, now);
+  replaceChildren(
+    requestsView,
+    // The spaces between the parts are for the text alone: the layout spaces them, and cuts only the label short.
+    lines.map(({ key, phase, mark, label, detail, how }) =>
+      h("div", { class: `request ${phase}`, "data-request": key }, mark, " ", h("span", { class: "label" }, label), detail && [" ", h("span", { class: "detail" }, `· ${detail}`)], " ", h("span", { class: "how" }, how)),
+    ),
+    more > 0 && h("div", { class: "request" }, `+ ${more} more`),
+  );
+}
+
+/** The title of the track or file a read of `blob` is for, as the queue and the downloads have it; else null. */
+const nameOf = (blob) => {
+  const file = blob && [...listed, ...downloading].find((known) => known.id === blob);
+  return file ? (file.title ?? file.name) : null;
+};
+
+/** An event of a request (requests.js), the page's or the worker's: the request counter's, and the traffic's. */
+function heard(event) {
+  const sample = sampleOf(event);
+  if (sample) record(sample);
+  requests = requestCounter.apply(requests, event.type === "sent" && event.method === "GET" ? { ...event, label: nameOf(event.blob) } : event);
+  // The bytes show with the next second.
+  if (event.type !== "bytes") showRequests();
+}
+
+// Every request the page makes goes through `fetch`, the SDK's too: watched there. What the worker answers, it watches.
+globalThis.fetch = requestCounter.watching(globalThis.fetch.bind(globalThis), {
   base: location.href,
   now: Date.now,
-  onRequest: ({ id, at }) => ((requests = requestCounter.sent(requests, id, at)), showRequests()),
-  onEnd: ({ id, at, outcome }) => ((requests = requestCounter.ended(requests, id, at, outcome)), showRequests()),
+  emit: heard,
+  byWorker: () => Boolean(navigator.serviceWorker?.controller),
 });
 
 setInterval(() => {
@@ -452,7 +488,8 @@ setInterval(() => {
   trafficView.textContent = formatRate(rate(traffic, now));
   usageView.textContent = formatUsage({ minute: total(traffic), started });
   sessionStorage.setItem(USAGE_KEY, JSON.stringify(started));
-  // The longest wait goes up, and the line goes, with time alone.
+  // The waits go up, and the lines go, with time alone.
+  requests = requestCounter.prune(requests, now);
   showRequests();
 }, 1000);
 
@@ -926,10 +963,18 @@ async function showBrowser(path) {
   );
 }
 
+/** The files being downloaded: their names go with their requests (SPEC §7.1). */
+let downloading = [];
+
 /** Saves a file to the device, decrypted (SPEC §7.1). `onProgress(bytes)` hears how much has been read. */
 async function download(entry, onProgress) {
-  const blob = await readWhole(await flows.read(session, entry), { size: entry.size, type: typeOfEntry(entry), onProgress });
-  offer(blob, entry.name);
+  downloading = [...downloading, entry];
+  try {
+    const blob = await readWhole(await flows.read(session, entry), { size: entry.size, type: typeOfEntry(entry), onProgress });
+    offer(blob, entry.name);
+  } finally {
+    downloading = downloading.filter((other) => other !== entry);
+  }
 }
 
 /**
@@ -1145,6 +1190,12 @@ async function showSettings() {
       passkeys,
       slots: Object.keys(session.keys.doc.passkeys),
       lastCleanup: remembered.get(cleanupKey(session)),
+      requestDetails,
+      onRequestDetails: (on) => {
+        requestDetails = on;
+        remembered.set(DETAILS_KEY, on);
+        showRequests();
+      },
       onAddPasskey: action(async () => showAddPasskey()),
       onSetUp: action(async (passkey) => {
         session = await flows.addPasskeySlot(session, passkey.id, await flows.prfFromPasskey(passkey.id));

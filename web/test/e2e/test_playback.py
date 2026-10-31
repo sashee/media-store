@@ -7,7 +7,7 @@ Also checks what the Service Worker answers for play URLs (206 ranges, 200, 416,
 plaintext reaches any stored blob, the player's controls, the queue with the Media Session: next, previous, moving on
 at a track's end, and the system's buttons, called the way the Android app's bridge will; the worker's cache of
 encrypted bytes: reads of what was fetched don't reach the server, the next track's start is fetched before it plays,
-and locking empties it; the traffic counter; and shuffle and repeat. Uploading itself is test_upload.py's.
+and locking empties it; the traffic counter, and the list of requests; and shuffle and repeat. Uploading itself is test_upload.py's.
 
     BACKEND_BIN=data/backend/bin/backend PYTHONPATH=data/sdk/share/e2ee-store/testing python web/test/e2e/test_playback.py    # after `make deps`
 """
@@ -272,6 +272,20 @@ def run(browser, backend: Backend, port: int) -> None:
     page.wait_for_function("() => /↓ [1-9]/.test(document.getElementById('traffic').textContent)", timeout=10_000)
     page.wait_for_function("() => document.getElementById('traffic').textContent === '↓ 0 B/s'", timeout=10_000)
     print("  ok    the counter shows what is fetched, and goes back to nothing")
+
+    # --- the list of requests, turned on in the settings
+    page.evaluate("document.getElementById('audio').pause()")
+    page.click("#settings")
+    page.check("#request-details")
+    page.click("#back")
+    lock(page)  # which empties the worker's cache: B two, not the track picked up where it stopped, is fetched again
+    unlock(page)
+    expect(page.locator("#requests")).to_have_class(re.compile(r"\bdetails\b"))
+    open_package(page, PACKAGE, "files")
+    play_button(page, "B two.wav").click()
+    playing(page, "B two")
+    expect(page.locator("#requests .request", has_text="B two").first).to_have_text(re.compile(r"^[↓✓] B two · all \d"))
+    print("  ok    the requests can be listed instead, each with the track it reads; that is remembered on the device")
 
     # --- repeat and shuffle, and what the notification shows of them
     # Whether the track is liked comes first, once known: none of these is.

@@ -370,6 +370,35 @@ input[type="file"]::file-selector-button,
   font-variant-numeric: tabular-nums;
 }
 
+/* The list of requests, one per line, takes the room of its most lines all the while (requests.js's MAX_LINES). A long
+   label is cut short; what a request reads, and how it goes, are not. */
+#requests.details {
+  height: calc(6 * 1.3em);
+  overflow: hidden;
+}
+
+#requests .request {
+  display: flex;
+  gap: 0.35rem;
+  line-height: 1.3em;
+  white-space: nowrap;
+}
+
+#requests .request .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#requests .request .how {
+  margin-left: auto;
+  padding-left: 0.5rem;
+}
+
+#requests .request.failed {
+  color: var(--danger);
+}
+
 /* The browser and the upload preview (SPEC §7.1) */
 .breadcrumbs {
   display: flex;

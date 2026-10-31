@@ -176,16 +176,6 @@ test("a fetch stops where another one got first, so a seek ahead fetches nothing
   assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob, "and the bytes are right, from either fetch");
 });
 
-test("every byte from the server is counted, and none from the cache", async () => {
-  const blob = bytesOf(1000);
-  const net = server({ a: blob });
-  let counted = 0;
-  const cache = makeBlobCache({ fetchRange: net.fetchRange, pieceSize: PIECE, onBytes: (bytes) => (counted += bytes) });
-  await read(await cache.respond("a", "bytes=0-999"));
-  await read(await cache.respond("a", "bytes=0-999"));
-  assert.equal(counted, 1000);
-});
-
 test("a long read is fetched in stretches of at most fetchBytes", async () => {
   const blob = bytesOf(1000);
   const net = server({ a: blob });
@@ -290,6 +280,16 @@ test("a fetch that breaks off is made again from the piece it was at, and the re
   const cache = makeBlobCache({ fetchRange: failing(net, ["break"]), pieceSize: PIECE, pauses: PAUSES });
   assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob);
   assert.deepEqual(net.requests, [["a", 0, 999], ["a", 100, 999]], "piece 0 had come whole; piece 1 is fetched again");
+});
+
+test("each attempt of a fetch is told how many came before it", async () => {
+  const blob = bytesOf(1000);
+  const net = server({ a: blob });
+  const fetchRange = failing(net, ["drop", "break"]);
+  const retries = [];
+  const cache = makeBlobCache({ fetchRange: (id, start, end, signal, retry) => (retries.push(retry), fetchRange(id, start, end, signal)), pieceSize: PIECE, pauses: PAUSES });
+  assert.deepEqual(await read(await cache.respond("a", "bytes=0-999")), blob);
+  assert.deepEqual(retries, [0, 1, 2]);
 });
 
 test("no network, 502–504 and a body that ends early are made again too", async () => {

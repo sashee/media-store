@@ -8,33 +8,43 @@
 // Every other request goes to the network as usual.
 
 import { makeBlobCache } from "./js/blob-cache.js";
+import { batched, requestOf, watch } from "./js/requests.js";
 
 /**
  * How long a page has to take a play URL on (js/player.js): to say it is working on it, or to answer. Once it has said
  * so, the answer may take as long as the bytes do, e.g. while the cache tries again (js/blob-cache.js).
  */
 const ANSWER_TIMEOUT_MS = 10_000;
-/** How often the pages hear how many bytes came from the server, while some do (the traffic counter). */
-const TRAFFIC_EVERY_MS = 500;
+/** How often the pages hear how this worker's requests to the server go, while some go (the request and traffic counters). */
+const REPORT_EVERY_MS = 500;
 const BLOB = /^\/api\/v1\/blobs\/([0-9a-f]{64})$/;
 
-let unreported = 0;
+// The events of this worker's requests (js/requests.js) the pages haven't heard of yet, and the timer that tells them.
+let unreported = [];
 let reporting = null;
-async function reportTraffic() {
+async function report() {
   reporting = null;
-  const bytes = unreported;
-  unreported = 0;
+  const events = unreported;
+  unreported = [];
   const pages = await self.clients.matchAll({ type: "window" });
-  pages.forEach((page) => page.postMessage({ type: "traffic", bytes }));
+  pages.forEach((page) => page.postMessage({ type: "requests", events }));
 }
+const emit = (event) => {
+  unreported = batched(unreported, event);
+  reporting ??= setTimeout(report, REPORT_EVERY_MS);
+};
+
+// The requests' keys: this worker's own, so those of a worker that takes over don't mix with them.
+const worker = crypto.randomUUID().slice(0, 8);
+let sent = 0;
+
+/** `fetch(request)`, watched (js/requests.js): the pages hear how it goes. `retry`: the attempts of it before. */
+const watched = (request, retry = 0) =>
+  watch(fetch, request, undefined, { key: `worker ${worker}:${sent++}`, what: { ...requestOf(request, undefined, self.location.href), retry }, lasting: true, now: Date.now, emit });
 
 const cache = makeBlobCache({
-  fetchRange: (id, start, end, signal) =>
-    fetch(`/api/v1/blobs/${id}`, { headers: { Range: `bytes=${start}-${end}` }, credentials: "same-origin", signal }),
-  onBytes: (bytes) => {
-    unreported += bytes;
-    reporting ??= setTimeout(reportTraffic, TRAFFIC_EVERY_MS);
-  },
+  fetchRange: (id, start, end, signal, retry) =>
+    watched(new Request(`/api/v1/blobs/${id}`, { headers: { Range: `bytes=${start}-${end}` }, credentials: "same-origin", signal }), retry),
 });
 
 // A new version takes over at once: the page and the worker are the same app, and the worker keeps nothing that matters.
@@ -64,7 +74,7 @@ self.addEventListener("fetch", (event) => {
 /** A ranged read of blob `id`: from the cache, or as it is from the server when the cache can't answer it. */
 async function cached(request, id) {
   const response = await cache.respond(id, request.headers.get("range")).catch(() => null);
-  return response ?? fetch(request);
+  return response ?? watched(request);
 }
 
 const failure = (status, text) => new Response(text, { status, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });

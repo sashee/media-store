@@ -2,21 +2,23 @@
 // page before anything is played, and answers the play URLs the worker passes on. The decrypting happens here, so the
 // key never leaves the page.
 
+import { isEvent } from "./requests.js";
+
 const WORKER = "/sw.js";
 
 /**
  * Starts the worker. `respond(url, range)` answers a play URL whose request had the Range header `range` (or none),
  * with a Response. `onError(message, url)` gets what couldn't be played, and its play URL: a failed read, before or
  * while the bytes go out.
- * `onTraffic(bytes)` hears how many bytes the worker fetched from the server since it last said.
+ * `onRequests(events)` hears how the worker's requests to the server went since it last said (requests.js).
  * Resolves once the worker controls this page: only then may a play URL be used, or it would go to the server.
  */
-export async function startPlayback({ respond, onError, onTraffic = () => {} }) {
+export async function startPlayback({ respond, onError, onRequests = () => {} }) {
   if (!("serviceWorker" in navigator)) throw new Error("This browser can't play tracks: it doesn't support Service Workers.");
   const container = navigator.serviceWorker;
   container.addEventListener("message", (event) => {
     if (event.data?.type === "play" && event.ports[0]) answer(event.data, event.ports, { respond, onError });
-    if (event.data?.type === "traffic" && Number.isSafeInteger(event.data.bytes)) onTraffic(event.data.bytes);
+    if (event.data?.type === "requests" && Array.isArray(event.data.events)) onRequests(event.data.events.filter(isEvent));
   });
   container.startMessages();
   const registration = await container.register(WORKER, { type: "module", scope: "/" });

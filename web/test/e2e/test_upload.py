@@ -212,7 +212,7 @@ def run(browser, backend: Backend, port: int) -> None:
     held, holding = [], [True]
     page.route("**/api/v1/blobs/*", lambda route: held.append(route) if holding[0] and route.request.method == "PUT" else route.continue_())
     page.click("#delete-package")  # the harness accepts the confirmation
-    expect(page.locator("#requests")).to_contain_text(re.compile(r"Requests: \d+ of \d+ answered · \d+ waiting"))
+    expect(page.locator("#requests")).to_contain_text(re.compile(r"Requests: \d+ of \d+ done(?: · \d+ loading)? · \d+ waiting"))
     holding[0] = False
     for route in held:
         route.continue_()
