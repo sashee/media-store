@@ -45,6 +45,13 @@ def albums(page, albums: str) -> list[str]:
     return page.eval_on_selector_all(f"#{albums} li[data-album]", "items => items.map((li) => li.dataset.album)")
 
 
+def opinions(page) -> dict[str, str | None]:
+    """The entries of the folder on screen, each with its ♥ ("liked") or 👎 ("disliked"), or None."""
+    return page.eval_on_selector_all(
+        "#entries li[data-entry]", "items => Object.fromEntries(items.map((li) => [li.dataset.entry, li.querySelector('.opinion')?.dataset.opinion ?? null]))"
+    )
+
+
 def likes(page, section: str = "likes") -> list[str]:
     return page.eval_on_selector_all(f"#{section} li[data-like]", "items => items.map((li) => li.dataset.like)")
 
@@ -131,6 +138,7 @@ def run(browser, backend: Backend, port: int) -> None:
 
     # --- only the liked ones of an album, or of an artist: Play likes, where there are any
     assert artists(page, "Band", "Debut") == ["01 Opening.wav", "02 Second.wav", "cover.jpg"]
+    assert opinions(page) == {"01 Opening.wav": None, "02 Second.wav": "liked", "cover.jpg": None}, opinions(page)
     page.click("#play-liked")
     expect(page.locator("#now-playing")).to_have_text("02 Second")
     page.click("#next")
@@ -162,6 +170,13 @@ def run(browser, backend: Backend, port: int) -> None:
     expect(page.locator("#now-playing")).to_have_text("Opening")
     expect(page.locator("#dislike")).to_have_attribute("aria-pressed", "true")
     page.wait_for_function("() => navigator.mediaSession.metadata?.artist === '👎 Disliked'")
+    assert opinions(page) == {"01 Opening.wav": "disliked", "02 Second.wav": "liked", "cover.jpg": None}, opinions(page)
+    page.click("#like")  # from the player: the browser's mark follows, in place
+    expect(page.locator("#entries li[data-entry='01 Opening.wav'] .opinion")).to_have_attribute("data-opinion", "liked")
+    page.click("#like")
+    expect(page.locator("#entries li[data-entry='01 Opening.wav'] .opinion")).not_to_have_attribute("data-opinion", "liked")
+    page.click("#dislike")
+    expect(page.locator("#entries li[data-entry='01 Opening.wav'] .opinion")).to_have_attribute("data-opinion", "disliked")
     page.evaluate("document.getElementById('audio').pause()")
     home(page)
     page.click("#open-dislikes")

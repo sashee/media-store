@@ -236,10 +236,11 @@ const shown = (path) => (path.length ? path.join(" / ") : "Library");
 /**
  * A directory of the tree: breadcrumbs, its entries, and for a package its package.json and its albums. `targets` maps
  * a file's name to where it is sorted; `tracks` are the names of its playable files; `playing` is the path of the
- * track in the player. `albums` (a package's, or null) can be set with `onSetAlbum(group, { artist, album })`. Every
- * file can be saved to the device with `onDownload(name, onProgress)`, `onProgress(bytes)` saying how much is read.
+ * track in the player; `opinionOf(sha256)` says whether a file's bytes are "liked", "disliked" or neither (null).
+ * `albums` (a package's, or null) can be set with `onSetAlbum(group, { artist, album })`. Every file can be saved to
+ * the device with `onDownload(name, onProgress)`, `onProgress(bytes)` saying how much is read.
  */
-export function browser({ path, entries, details, albums: groups = null, targets, tracks, playing, onHome, onOpen, onPlay, onPlayAll, onPlayLiked, onDelete, onSetAlbum, onDownload, onError }) {
+export function browser({ path, entries, details, albums: groups = null, targets, tracks, playing, opinionOf, onHome, onOpen, onPlay, onPlayAll, onPlayLiked, onDelete, onSetAlbum, onDownload, onError }) {
   const crumbs = [[], ...path.map((_, i) => path.slice(0, i + 1))];
   const row = (entry) => {
     const full = [...path, entry.name].join("/");
@@ -248,10 +249,12 @@ export function browser({ path, entries, details, albums: groups = null, targets
     }
     const target = targets.get(entry.name);
     const playable = tracks.includes(entry.name);
+    const sha256 = typeof entry.sha256 === "string" ? entry.sha256 : null;
     return h(
       "li",
-      { "data-entry": entry.name, ...(playable ? { "data-track": full } : {}), class: full === playing ? "playing" : "" },
+      { "data-entry": entry.name, ...(playable ? { "data-track": full } : {}), ...(sha256 ? { "data-sha256": sha256 } : {}), class: full === playing ? "playing" : "" },
       playable ? h("button", { type: "button", class: "row-main", "data-action": "play", onclick: () => onPlay(entry.name).catch(onError) }, "▶ ", entry.name) : h("span", { class: "row-main" }, entry.name),
+      opinionMark(sha256 && opinionOf(sha256)),
       downloadButton(entry, onDownload, onError),
       h("span", { class: "muted" }, formatBytes(entry.size)),
       target && h("span", { class: "target" }, `→ ${shownTarget(target)}`),
@@ -287,6 +290,17 @@ export function browser({ path, entries, details, albums: groups = null, targets
       h("ul", { class: "rows", id: "entries" }, entries.length ? entries.map(row) : h("li", { class: "muted empty" }, "Empty")),
     ),
   );
+}
+
+const OPINIONS = { liked: ["♥", "Liked"], disliked: ["👎", "Disliked"] };
+
+/**
+ * What a file row says of its bytes (`opinion`: "liked", "disliked" or null): ♥, 👎, or an empty slot, so the rows
+ * still to decide on stand out. It is swapped for a new one when a like or a dislike changes from the player.
+ */
+export function opinionMark(opinion) {
+  const [mark, label] = OPINIONS[opinion] ?? [];
+  return h("span", { class: "opinion", ...(mark ? { "data-opinion": opinion, role: "img", "aria-label": label, title: label } : {}) }, mark);
 }
 
 /** Download: saves the file to the device. While it is read, the button says how far along it is. */

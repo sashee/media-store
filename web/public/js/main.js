@@ -286,6 +286,17 @@ function stop() {
 
 const markPlaying = () => document.querySelectorAll("li[data-track]").forEach((row) => row.classList.toggle("playing", row.dataset.track === playing()));
 
+/** Whether the bytes with a SHA-256 are "liked" or "disliked" (or neither: null), among `likes` and `dislikes`. */
+const opinions = (likes, dislikes) => (sha256) => (isLiked(likes, sha256) ? "liked" : isDisliked(dislikes, sha256) ? "disliked" : null);
+
+/** The ♥ and 👎 of the file rows on show, as they are now: in place, so a like from the player keeps the scroll. */
+async function markOpinions() {
+  const rows = [...document.querySelectorAll("li[data-sha256]")];
+  if (rows.length === 0) return;
+  const opinionOf = opinions(await likedEntries(), dislikes);
+  rows.forEach((row) => row.querySelector(".opinion")?.replaceWith(libraryScreens.opinionMark(opinionOf(row.dataset.sha256))));
+}
+
 // ---------------------------------------------------------------- likes (SPEC §5.6)
 
 const likeButton = document.getElementById("like");
@@ -316,6 +327,7 @@ async function toggleLike() {
   await save(isLiked(await likedEntries(), track.sha256) ? [unlike(track.sha256)] : [like(track, Date.now()), undislike(track.sha256)]);
   await refreshDislikes();
   await showLiked();
+  await markOpinions();
   if (document.getElementById("likes-screen")) await showLikes();
   if (document.getElementById("dislikes-screen")) await showDislikes();
 }
@@ -335,6 +347,7 @@ async function toggleDislike() {
   await save(was ? [undislike(track.sha256)] : [dislike({ ...track, artist: tags.artist || tags.albumArtist }, Date.now()), unlike(track.sha256)]);
   await refreshDislikes();
   await showLiked();
+  await markOpinions();
   if (document.getElementById("likes-screen")) await showLikes();
   if (document.getElementById("dislikes-screen")) await showDislikes();
   if (was) return;
@@ -941,6 +954,7 @@ async function showBrowser(path) {
       targets,
       tracks: playable.map((e) => e.name),
       playing: playing(),
+      opinionOf: opinions(await likedEntries(), dislikes),
       onHome: () => go({ screen: "home" }),
       onOpen: (at) => go({ screen: "browser", path: at }),
       onPlay: async (name) => {

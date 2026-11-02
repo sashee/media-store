@@ -422,6 +422,16 @@ input[type="file"]::file-selector-button,
   color: var(--accent);
 }
 
+/* ♥ or 👎, in a slot of its own even when empty, so the rows still to decide on line up. */
+.opinion {
+  min-width: 1.5em;
+  text-align: center;
+}
+
+.opinion[data-opinion="liked"] {
+  color: var(--accent);
+}
+
 h3 {
   font-size: 1rem;
   margin: var(--gap) 0 0.25rem;
