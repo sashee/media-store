@@ -1,9 +1,9 @@
 # The checks (the backend's Rust suite and lint are e2ee-store's):
 #
 # - web-unit: the frontend's Node unit tests, against the web package, so with the SDK it ships.
-# - e2e-playback, e2e-upload, e2e-library: the browser tests, on e2ee-store's harness. The backend package behind
-#   socat (as the iroh shim reaches it) serves the web package; Chromium with a PRF-capable virtual authenticator plays
-#   a track through the Service Worker. A sandboxed build, not a VM: it needs no network.
+# - e2e-playback, e2e-upload, e2e-library, e2e-loudness: the browser tests, on e2ee-store's harness. The backend
+#   package behind socat (as the iroh shim reaches it) serves the web package; Chromium with a PRF-capable virtual
+#   authenticator plays a track through the Service Worker. A sandboxed build, not a VM: it needs no network.
 # - vm: the NixOS module in a VM (./tests/lib.nix), on `machineModules`.
 # - e2ee-store-sdk-unit, e2ee-store-browser, e2ee-store-vm-s3: e2ee-store's own, the ones it has an app rerun with
 #   the app's nixpkgs (its nix/tests/default.nix), the VM test on `machineModules` as well.
@@ -75,6 +75,7 @@ in
   e2e-playback = browserTest "e2e-playback" "test_playback.py";
   e2e-upload = browserTest "e2e-upload" "test_upload.py";
   e2e-library = browserTest "e2e-library" "test_library.py";
+  e2e-loudness = browserTest "e2e-loudness" "test_loudness.py";
 
   vm = import ./tests/lib.nix { inherit pkgs machineModules; };
 }

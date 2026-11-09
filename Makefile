@@ -56,7 +56,7 @@ test-web: deps
 # harness, next to the SDK).
 E2E_ENV := BACKEND_BIN=$(BACKEND) PYTHONPATH=$(abspath $(SDK)/../testing)
 e2e: deps
-	$(RUN) 'for test in playback upload library; do $(E2E_ENV) python3 web/test/e2e/test_$$test.py || exit 1; done'
+	$(RUN) 'for test in playback upload library loudness; do $(E2E_ENV) python3 web/test/e2e/test_$$test.py || exit 1; done'
 
 # Local development: the backend on ./data/backend.sock (config.toml), reachable at
 # http://localhost:$(PORT) through socat, the way the iroh shim reaches it.

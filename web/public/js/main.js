@@ -6,16 +6,19 @@ import { flows } from "./flows.js";
 import { UserFacingError } from "../sdk/passkeys.js";
 import { RollbackError, rollbackCheck } from "../sdk/save.js";
 import { WrongKeyError } from "../sdk/keys.js";
-import { isDue } from "../sdk/maintenance.js";
+import { formatBytes, isDue } from "../sdk/maintenance.js";
 import { formatRecoveryKey, generateRecoveryKey } from "../sdk/recovery-key.js";
+import { sha256Hex } from "../sdk/crypto.js";
 import { parseSetupFragment } from "../sdk/setup-link.js";
 import { TreeError } from "../sdk/tree.js";
-import { freeName, isAudio, orEmpty, parsePlayUrl, playUrl, playUrlBlob, trackOf, typeOfEntry, unplayable, walk } from "./library.js";
+import { freeName, isAudio, isTrack, orEmpty, parsePlayUrl, playUrl, playUrlBlob, trackOf, typeOfEntry, unplayable, walk } from "./library.js";
 import { allPackages, defaultPackageName, deletePackage, FILES, PACKAGE_DOC, packageDoc, packageFiles, readPackageDoc, savePackage, setSorting, UPLOADS } from "./packages.js";
 import { ARTISTS, sortArtists } from "./artists.js";
 import { isLiked, LIKES, like, newestFirst, notInPackages, onlyLiked, repointLikes, unlike } from "./likes.js";
 import { duplicates } from "./duplicates.js";
 import { DISLIKES, dislike, isDisliked, readDislikes, undislike } from "./dislikes.js";
+import { LOUDNESS, readLoudness, recordLoudness, toMeasure, volumeFor } from "./loudness.js";
+import { measureLoudness } from "./measure.js";
 import { findTrack, openResume, resumeKey, resumeState, sealResume, startAt } from "./resume.js";
 import { albumGroups, entryTags, packageTargets, packageTracks, regroup } from "./sorting.js";
 import { filesInFolder, picked, planUpload, stored } from "./upload-plan.js";
@@ -45,12 +48,15 @@ const nowPlaying = document.getElementById("now-playing");
 /** The unlocked session (flows.js), plus `rollback` when the library looked older than expected. */
 let session = null;
 
-/** The upload in progress, if any. Leaving its screen stops it (SPEC §5.1): showing any other screen does. */
-let uploading = null;
+/**
+ * The long work in progress, if any: an upload (SPEC §5.1) or measuring loudness (§5.9), as its AbortController.
+ * Leaving its screen stops it: showing any other screen does. Inactivity doesn't lock while it runs.
+ */
+let working = null;
 
 const show = (screen) => {
-  uploading?.abort(new DOMException("The upload was cancelled.", "AbortError"));
-  uploading = null;
+  working?.abort(new DOMException("Another screen was opened.", "AbortError"));
+  working = null;
   replaceChildren(app, screen);
   window.scrollTo(0, 0);
 };
@@ -156,13 +162,19 @@ function queue() {
 let dislikes = [];
 const skipped = (track) => isDisliked(dislikes, track.sha256);
 
-/** dislikes.json as the library has it now: [] when there is none. */
-async function readDislikedNow() {
-  const entry = (await entriesAt(session, DISLIKES.slice(0, -1))).find((e) => e.name === DISLIKES.at(-1) && e.kind === "file");
-  return entry ? readDislikes(await readAll(flows.read(session, entry))) : [];
+/** A file of the library at `path`, read whole as it is now: null when there is none. */
+async function fileNow(path) {
+  const entry = (await entriesAt(session, path.slice(0, -1))).find((e) => e.name === path.at(-1) && e.kind === "file");
+  return entry ? readAll(flows.read(session, entry)) : null;
 }
 const refreshDislikes = async () => {
-  dislikes = await readDislikedNow();
+  dislikes = readDislikes(await fileNow(DISLIKES));
+};
+
+/** The loudness of the tracks measured (loudness.js), as last read: after the unlock, and after each change. */
+let loudness = new Map();
+const refreshLoudness = async () => {
+  loudness = readLoudness(await fileNow(LOUDNESS));
 };
 
 /** Where Play all and Play likes start: the first track not disliked. */
@@ -192,6 +204,8 @@ function load(track, { at = 0, fetch = true } = {}) {
   playingLiked = null;
   audio.preload = fetch ? "auto" : "metadata";
   audio.src = playUrl(track);
+  // At the same loudness as every other track (SPEC §5.9), set as it starts: nothing jumps while it plays.
+  audio.volume = volumeFor(loudness, track.sha256);
   // Once its length is known: set before, the browser's own load resets it.
   if (at > 0) {
     const seek = () => player.dataset.track === track.name && (audio.currentTime = at);
@@ -599,8 +613,8 @@ function watchInactivity() {
   let timer = null;
   const arm = () => {
     clearTimeout(timer);
-    // Not while a track plays, nor while an upload runs: locking would stop it.
-    timer = setTimeout(() => (audio.paused && uploading === null ? lock() : arm()), INACTIVITY_LOCK_MS);
+    // Not while a track plays, nor while an upload or measuring runs: locking would stop it.
+    timer = setTimeout(() => (audio.paused && working === null ? lock() : arm()), INACTIVITY_LOCK_MS);
   };
   arm();
   for (const event of ["pointerdown", "keydown"]) document.addEventListener(event, arm, { passive: true });
@@ -808,14 +822,20 @@ async function openLibrary(unlocked) {
   settingsButton.hidden = false;
   if (first && !session.rollback && isDue(remembered.get(cleanupKey(session)), Date.now())) automaticCleanup();
   await refreshDislikes().catch(() => {});
+  await refreshLoudness().catch(() => {});
   await replace({ screen: "home" });
   if (first) restorePlaying().catch(() => {});
 }
 
-/** Saves the steps (e2ee-store SDK SPEC §6.4); `onProgress` follows the uploads, `signal` stops them and the save. */
-async function save(steps, { onProgress, signal } = {}) {
+/** Throws when nothing can be saved now: after a rollback, until it is acknowledged, or in a read-only library. */
+function checkSavable() {
   if (session.rollback) throw new UserFacingError("Saving is paused until you continue past the warning about an older library.");
   if (!session.root.writable || !session.keys.writable) throw new UserFacingError("This library was saved by a newer version of the app, so it's read-only here. Update the app to make changes.");
+}
+
+/** Saves the steps (e2ee-store SDK SPEC §6.4); `onProgress` follows the uploads, `signal` stops them and the save. */
+async function save(steps, { onProgress, signal } = {}) {
+  checkSavable();
   try {
     const { session: saved } = await flows.save(session, steps, { onProgress, signal });
     session = { ...saved, rollback: checkRevision(saved) };
@@ -980,15 +1000,22 @@ async function showBrowser(path) {
 /** The files being downloaded: their names go with their requests (SPEC §7.1). */
 let downloading = [];
 
-/** Saves a file to the device, decrypted (SPEC §7.1). `onProgress(bytes)` hears how much has been read. */
-async function download(entry, onProgress) {
+/**
+ * A file read whole and decrypted, as a Blob, which the browser keeps out of the page's memory when it is large; its
+ * requests go by its name meanwhile. `onProgress(bytes)` hears how much has been read; `signal` stops it.
+ */
+async function readFile(entry, { onProgress, signal } = {}) {
   downloading = [...downloading, entry];
   try {
-    const blob = await readWhole(await flows.read(session, entry), { size: entry.size, type: typeOfEntry(entry), onProgress });
-    offer(blob, entry.name);
+    return await readWhole(await flows.read(session, entry, { signal }), { size: entry.size, type: typeOfEntry(entry), onProgress });
   } finally {
     downloading = downloading.filter((other) => other !== entry);
   }
+}
+
+/** Saves a file to the device, decrypted (SPEC §7.1). `onProgress(bytes)` hears how much has been read. */
+async function download(entry, onProgress) {
+  offer(await readFile(entry, { onProgress }), entry.name);
 }
 
 /**
@@ -1111,17 +1138,20 @@ function showAddMusic() {
         const tags = plan.rows.map((row) => row.tags).filter(Boolean);
         return { ...plan, name: defaultPackageName({ torrent: plan.torrent, folder: plan.folder, tags, now: Date.now() }) };
       },
-      onUpload: async (plan, name, onProgress) => {
+      onUpload: async (plan, name, { onProgress, onStatus }) => {
         clearBanner();
         const controller = new AbortController();
-        uploading = controller;
+        working = controller;
         const awake = keepScreenOn();
         awake.kept.then((kept) => {
-          if (uploading !== controller) return;
+          if (working !== controller) return;
           showNotice(kept ? "The screen stays on until the upload is done." : "Keep the screen on until the upload is done: turning it off stops the upload.");
         });
         try {
-          const folder = await uploadPackage(plan, name, onProgress, controller.signal);
+          const measured = await measureUpload(plan, onStatus, controller.signal);
+          onStatus("");
+          const folder = await uploadPackage(plan, name, measured, onProgress, controller.signal);
+          await refreshLoudness().catch(() => {});
           const done = plan.into ? `Added to the package "${folder}".` : `Uploaded the package "${folder}".`;
           // Its tracks' SHA-256s are known now, so the same bytes already sorted aren't sorted twice (SPEC §5.5).
           const sorted = await save([sortArtists, repointLikes]).then(
@@ -1137,7 +1167,7 @@ function showAddMusic() {
           showNotice("The upload was cancelled. Nothing of it was saved.");
         } finally {
           awake.release();
-          if (uploading === controller) uploading = null;
+          if (working === controller) working = null;
         }
       },
       // Leaving is back: where Add music was opened from.
@@ -1148,8 +1178,32 @@ function showAddMusic() {
   );
 }
 
-/** Stores what the plan says, as a new package named `name` or into the one it completes; → the package's name. */
-async function uploadPackage(plan, name, onProgress, signal) {
+/**
+ * The loudness of the tracks an upload stores (SPEC §5.9), measured from the picked files before anything is uploaded:
+ * [[sha256, { lufs, peak }]], without the bytes measured already. A track the browser can't decode is left out, for
+ * Measure loudness to try again. `onStatus(text)` says how far it got; `signal` stops it.
+ */
+async function measureUpload(plan, onStatus, signal) {
+  const files = plan.rows.filter((row) => stored(row) && isTrack({ name: row.path.at(-1), type: row.type }) && !unplayable(row.type, canPlay)).map((row) => row.file.source);
+  // One at a time, as each is read whole: built up here, and only here.
+  const measured = new Map();
+  for (const [i, file] of files.entries()) {
+    signal.throwIfAborted();
+    onStatus(`Measuring loudness: ${i + 1} of ${files.length}`);
+    const sha256 = await sha256Hex(new Uint8Array(await file.arrayBuffer()));
+    if (loudness.has(sha256) || measured.has(sha256)) continue;
+    const value = await measureLoudness(file).catch(() => null);
+    if (value) measured.set(sha256, value);
+  }
+  signal.throwIfAborted();
+  return [...measured];
+}
+
+/**
+ * Stores what the plan says, as a new package named `name` or into the one it completes, with its tracks' loudness
+ * (`measured`, measureUpload's); → the package's name.
+ */
+async function uploadPackage(plan, name, measured, onProgress, signal) {
   const rows = plan.rows.filter(stored);
   const files = rows.map((row) => ({
     path: row.path,
@@ -1163,7 +1217,7 @@ async function uploadPackage(plan, name, onProgress, signal) {
   const doc = before
     ? { ...before, updated: new Date(now).toISOString(), files: before.files + rows.length, bytes: before.bytes + rows.reduce((sum, row) => sum + row.file.size, 0), missing }
     : packageDoc({ name: folder, source: plan.source, torrent: plan.torrent, files: rows.map((row) => row.file), missing, uploaded: now });
-  await save([savePackage({ name: folder, into: plan.into, files, doc, torrent: plan.into ? null : (plan.torrent?.bytes ?? null) })], { onProgress, signal });
+  await save([savePackage({ name: folder, into: plan.into, files, doc, torrent: plan.into ? null : (plan.torrent?.bytes ?? null) }), recordLoudness(measured)], { onProgress, signal });
   return folder;
 }
 
@@ -1225,6 +1279,7 @@ async function showSettings() {
         showNotice("Sorted every package's tracks into artists and albums again.");
       }),
       onCleanup: action(manualCleanup),
+      onMeasureLoudness: action(measureLibrary),
       onCheckDuplicates: action(async () => {
         const found = duplicates(await walk(listing(), []));
         show(screens.duplicatesReport({ found, onDone: () => showSettings().catch(showError) }));
@@ -1306,6 +1361,93 @@ async function automaticCleanup() {
     session = { ...session, keys: next.keys };
     remembered.set(cleanupKey(session), report);
   }
+}
+
+// ---------------------------------------------------------------- measuring loudness (SPEC §5.9)
+
+/** How many tracks Measure loudness measures between saves, and the longest it goes without saving what it has. */
+const LOUDNESS_BATCH = 20;
+const LOUDNESS_SAVE_MS = 60 * 1000;
+
+/**
+ * The tracks ({ path, entry }) measured one by one, each read whole, the next one's read under way while one is
+ * measured: yields each with its `value` ({ lufs, peak }), or the `error` it didn't decode with. A failed read ends it,
+ * as the next would most likely fail the same way (no network, say); so does `signal`.
+ */
+async function* measuredTracks(tracks, signal) {
+  const read = (i) => (i < tracks.length ? readFile(tracks[i].entry, { signal }) : null);
+  let next = read(0);
+  for (const [i, track] of tracks.entries()) {
+    const blob = await next;
+    next = read(i + 1);
+    // Awaited in the next round; when there is none, as it stopped, its failure is no news.
+    next?.catch(() => {});
+    yield await measureLoudness(blob).then(
+      (value) => ({ ...track, value }),
+      (error) => ({ ...track, error }),
+    );
+  }
+}
+
+/**
+ * Measure loudness, in the settings: measures every track whose loudness isn't known yet, after saying how much that
+ * downloads. What is measured is saved every so often, so stopping keeps it (Stop, leaving the screen, locking), and
+ * measuring again goes on from there.
+ */
+async function measureLibrary() {
+  checkSavable();
+  await refreshLoudness();
+  const tracks = toMeasure(await walk(listing(), []), loudness, canPlay);
+  if (tracks.length === 0) return showNotice("The loudness of every track is measured.");
+  const bytes = tracks.reduce((sum, { entry }) => sum + entry.size, 0);
+  const count = tracks.length === 1 ? "1 track" : `${tracks.length} tracks`;
+  if (!window.confirm(`Measure the loudness of ${count}? Each is downloaded whole: ${formatBytes(bytes)} in all.`)) return;
+  const controller = new AbortController();
+  const progress = screens.loudnessProgress({ tracks: tracks.length, bytes, onStop: () => controller.abort(new DOMException("Stopped.", "AbortError")) });
+  show(progress.element);
+  working = controller;
+  const awake = keepScreenOn();
+  // How it goes, kept here as it goes: what is measured, what of it isn't saved yet, and why it stopped.
+  const results = [];
+  let batch = [];
+  let read = 0;
+  let savedAt = Date.now();
+  let failure = null;
+  try {
+    for await (const result of measuredTracks(tracks, controller.signal)) {
+      results.push(result);
+      read += result.entry.size;
+      progress.update({ done: results.length, read });
+      if (result.value) batch = [...batch, [result.entry.sha256, result.value]];
+      if (batch.length >= LOUDNESS_BATCH || Date.now() - savedAt >= LOUDNESS_SAVE_MS) {
+        await save([recordLoudness(batch)]);
+        batch = [];
+        savedAt = Date.now();
+      }
+    }
+  } catch (error) {
+    failure = error;
+  } finally {
+    // A read ahead goes no further.
+    controller.abort();
+    awake.release();
+    if (working === controller) working = null;
+  }
+  if (batch.length) await save([recordLoudness(batch)]).catch((error) => (failure ??= error));
+  await refreshLoudness().catch(() => {});
+  const stoppedByUser = failure?.name === "AbortError";
+  if (failure && !stoppedByUser) console.error(failure);
+  // Another screen was opened: it stays, and says how far measuring got.
+  if (!progress.element.isConnected) return showNotice(`Measuring loudness stopped after ${results.length} of ${tracks.length} tracks. Measure loudness again goes on from there.`);
+  show(
+    screens.loudnessReport({
+      results,
+      left: tracks.length - results.length,
+      stopped: failure !== null,
+      error: failure && !stoppedByUser ? (failure.message ?? String(failure)) : null,
+      onDone: () => showSettings().catch(showError),
+    }),
+  );
 }
 
 // ---------------------------------------------------------------- start

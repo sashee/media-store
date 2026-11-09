@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { NO_TAGS, readTags, tagsOf } from "../../public/js/tags.js";
+import { NO_TAGS, readDuration, readTags, tagsOf } from "../../public/js/tags.js";
 
 const te = new TextEncoder();
 const concat = (...parts) => {
@@ -173,4 +173,90 @@ test("a file without tags, or with broken ones, has none, and nothing throws", a
 
 test("tag text is cleaned: control characters, trailing NULs and length", () => {
   assert.deepEqual(tagsOf({ title: "a\tb\u0000\u0000", track: "x", date: "unknown", artist: "y".repeat(400) }), expected({ title: "a b", artist: "y".repeat(300) }));
+});
+
+// ---------------------------------------------------------------- length
+
+const seconds = async (data) => readDuration(file(data));
+const close = (actual, expected, tolerance = 0.01, message = "") => assert.ok(actual !== null && Math.abs(actual - expected) <= tolerance, `${message} ${actual} is not ${expected} ± ${tolerance}`);
+const le64 = (n) => concat(le32(n % 2 ** 32), le32(Math.floor(n / 2 ** 32)));
+const le16 = (n) => bytes(n & 255, n >> 8);
+
+test("length: WAV's data over its bytes per second, as much of it as the file has", async () => {
+  const chunk = (id, data) => concat(ascii(id), le32(data.length), data, data.length % 2 ? bytes(0) : bytes());
+  const fmt = concat(le16(1), le16(1), le32(8000), le32(16000), le16(2), le16(16));
+  const wav = (data, size = data.length) => {
+    const body = concat(ascii("WAVE"), chunk("LIST", concat(ascii("INFO"), chunk("INAM", te.encode("x\0")))), chunk("fmt ", fmt), concat(ascii("data"), le32(size), data));
+    return concat(ascii("RIFF"), le32(body.length), body);
+  };
+  close(await seconds(wav(new Uint8Array(40_000))), 2.5);
+  close(await seconds(wav(new Uint8Array(32_000), 0xffffffff)), 2, 0.01, "a streamed WAV says no size: the file's");
+});
+
+test("length: FLAC's STREAMINFO, also after an ID3 tag; and its reads stay small", async () => {
+  // 44.1 kHz, stereo, 16 bits, 7938000 samples: 180 s.
+  const streaminfo = concat(new Uint8Array(10), bytes(0x0a, 0xc4, 0x42, 0xf0), be32(7938000), new Uint8Array(16));
+  const flac = concat(ascii("fLaC"), bytes(0, 0, 0, 34), streaminfo, new Uint8Array(500_000));
+  const read = file(flac);
+  close(await readDuration(read), 180);
+  assert.ok(read.reads.every(([start, end]) => end - start <= 64 * 1024), "the audio isn't read");
+  close(await seconds(concat(id3(4, [id3Frame(4, "TIT2", concat(bytes(3), te.encode("x")))]), flac)), 180);
+  assert.equal(await seconds(concat(ascii("fLaC"), bytes(0, 0, 0, 34), new Uint8Array(34))), null, "no rate, no samples: not known");
+});
+
+/** One Ogg page holding `packet` whole, at `granule` (-1: no packet ends on it). */
+const oggPage = (packet, granule, serial = 1, sequence = 0) =>
+  concat(ascii("OggS"), bytes(0, 0), granule === -1 ? new Uint8Array(8).fill(255) : le64(granule), le32(serial), le32(sequence), new Uint8Array(4), bytes(1, packet.length), packet);
+
+test("length: Ogg's last page's granule position, at Opus's 48 kHz less its pre-skip, or at Vorbis's rate", async () => {
+  const opusHead = concat(ascii("OpusHead"), bytes(1, 2), le16(312), le32(44100), new Uint8Array(3));
+  const opus = concat(
+    oggPage(opusHead, 0),
+    oggPage(ascii("OpusTags"), 0, 1, 1),
+    new Uint8Array(100_000),
+    oggPage(new Uint8Array(100), 48000 * 10 + 312, 1, 2),
+    oggPage(new Uint8Array(100), 999_999_999, 2, 0),
+    oggPage(new Uint8Array(100), -1, 1, 3),
+  );
+  close(await seconds(opus), 10);
+  const vorbisId = concat(bytes(1), ascii("vorbis"), le32(0), bytes(2), le32(44100), new Uint8Array(13));
+  close(await seconds(concat(oggPage(vorbisId, 0), new Uint8Array(1000), oggPage(new Uint8Array(10), 44100 * 7, 1, 1))), 7);
+  assert.equal(await seconds(concat(oggPage(ascii("Speex   "), 0), oggPage(new Uint8Array(10), 1000, 1, 1))), null, "another codec");
+});
+
+test("length: MP4's mvhd, version 0 and 1, also when moov comes after the audio", async () => {
+  const mvhd0 = box("mvhd", bytes(0, 0, 0, 0), be32(0), be32(0), be32(1000), be32(123_456), new Uint8Array(80));
+  close(await seconds(concat(box("ftyp", ascii("M4A ")), box("mdat", new Uint8Array(200_000)), box("moov", mvhd0))), 123.456);
+  const mvhd1 = box("mvhd", bytes(1, 0, 0, 0), new Uint8Array(16), be32(44100), be32(0), be32(44100 * 300), new Uint8Array(80));
+  close(await seconds(concat(box("ftyp", ascii("M4A ")), box("moov", box("trak", new Uint8Array(50)), mvhd1))), 300);
+  assert.equal(await seconds(concat(box("ftyp", ascii("M4A ")), box("mdat", new Uint8Array(100)))), null, "no moov");
+});
+
+/** MPEG-1 Layer III frames at 128 kbit/s and 44.1 kHz: 417 bytes each; the first one's body is `first`. */
+const mp3Frames = (count, first = new Uint8Array(0)) =>
+  concat(...Array.from({ length: count }, (_, i) => concat(bytes(0xff, 0xfb, 0x90, 0x00), i === 0 ? first : bytes(), new Uint8Array(413 - (i === 0 ? first.length : 0)))));
+
+test("length: an MP3's Xing or VBRI frame count, else its bitrate; stray bytes that look like a frame don't count", async () => {
+  const tag = id3(3, [id3Frame(3, "TIT2", concat(bytes(0), ascii("Song")))]);
+  close(await seconds(concat(tag, mp3Frames(100))), (100 * 417 * 8) / 128_000, 0.001);
+  const xing = concat(new Uint8Array(32), ascii("Xing"), be32(1), be32(10_000));
+  close(await seconds(concat(tag, mp3Frames(5, xing))), (10_000 * 1152) / 44100);
+  close(await seconds(mp3Frames(5, concat(new Uint8Array(32), ascii("Info"), be32(1), be32(441)))), (441 * 1152) / 44100, 0.001);
+  const vbri = concat(new Uint8Array(32), ascii("VBRI"), le16(1), le16(0), le16(75), be32(0), be32(2000));
+  close(await seconds(mp3Frames(5, vbri)), (2000 * 1152) / 44100);
+  const stray = concat(bytes(0xff, 0xfb, 0x90, 0x00), new Uint8Array(6).fill(7));
+  close(await seconds(concat(stray, mp3Frames(100))), (100 * 417 * 8) / 128_000, 0.001);
+});
+
+test("length: anything else isn't known, and nothing throws", async () => {
+  for (const data of [
+    new Uint8Array(0),
+    te.encode("not audio at all"),
+    concat(bytes(0xff, 0xf1, 0x50, 0x80), new Uint8Array(1000)),
+    concat(ascii("ID3"), bytes(3, 0, 0), syncsafe(1_000_000)),
+    concat(ascii("RIFF"), le32(4), ascii("WAVE"), ascii("LIST"), le32(99999)),
+    concat(box("ftyp", ascii("M4A ")), concat(be32(999_999), ascii("moov"))),
+  ]) {
+    assert.equal(await seconds(data), null);
+  }
 });

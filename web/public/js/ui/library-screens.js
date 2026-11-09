@@ -90,7 +90,8 @@ const STATUS = {
 /**
  * Adding music: a torrent (optional), files or a folder, then a preview of what will be stored and where it would be
  * sorted, with the albums to correct. `prepare({ torrent, files })` makes the plan (upload-plan.js), `files` as
- * [{ file, path }]; `onUpload(plan, name, onProgress)` stores it, with the albums as set. A folder is picked with a
+ * [{ file, path }]; `onUpload(plan, name, { onProgress, onStatus })` stores it, with the albums as set: `onProgress`
+ * hears its uploads' bytes, `onStatus(text)` what it does before them. A folder is picked with a
  * folder input where `folderInput` says it picks folders, or else with `pickFolder()` → [{ file, path }], if given.
  */
 export function addMusic({ folderInput: folderPicks, pickFolder, prepare, onUpload, onCancel, onHome, onError }) {
@@ -170,11 +171,15 @@ export function addMusic({ folderInput: folderPicks, pickFolder, prepare, onUplo
     const bytes = toStore.reduce((sum, row) => sum + row.file.size, 0);
     const count = (status) => current.rows.filter((row) => row.status === status).length;
     const progress = h("progress", { id: "upload-progress", max: 1, value: 0, hidden: true });
+    const step = h("p", { class: "muted", id: "upload-step", role: "status" });
     const start = actionButton(
       "Upload",
       async () => {
         progress.hidden = false;
-        await onUpload(current, packageName(), ({ bytes: done, totalBytes }) => (progress.value = totalBytes ? done / totalBytes : 0));
+        await onUpload(current, packageName(), {
+          onProgress: ({ bytes: done, totalBytes }) => (progress.value = totalBytes ? done / totalBytes : 0),
+          onStatus: (text) => (step.textContent = text),
+        });
       },
       onError,
       { class: "primary", id: "upload-start", disabled: toStore.length === 0 },
@@ -195,6 +200,7 @@ export function addMusic({ folderInput: folderPicks, pickFolder, prepare, onUplo
         { id: "upload-summary" },
         [`${toStore.length} files to upload (${formatBytes(bytes)})`, count("missing") && `${count("missing")} missing`, count("unused") && `${count("unused")} left out`, count("present") && `${count("present")} already there`].filter(Boolean).join(" · "),
       ),
+      step,
       progress,
       h("div", { class: "actions" }, start, h("button", { type: "button", onclick: onCancel }, "Cancel")),
     );

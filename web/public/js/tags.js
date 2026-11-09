@@ -329,3 +329,127 @@ async function fieldsOf(size, read) {
   }
   return size >= 128 ? parseId3v1(await read(size - 128, size)) : {};
 }
+
+// ---------------------------------------------------------------- length (SPEC §5.9)
+
+const le16 = (b, at) => b[at] | (b[at + 1] << 8);
+
+// MPEG audio frame headers: sample rates by version (3: MPEG-1, 2: MPEG-2, 0: MPEG-2.5), and kbit/s by bitrate index.
+const MPEG_RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
+const MPEG1_LAYER3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+const MPEG1_LAYER2 = [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384];
+const MPEG2_LAYERS23 = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+
+/**
+ * The MPEG audio frame (Layer II or III) whose header is at `at`: { rate, bitrate (bit/s), samples (per frame),
+ * length (bytes), xing (where a Layer III frame's Xing header would be) }; null if there is none.
+ */
+function mpegFrame(b, at) {
+  if (at + 4 > b.length || b[at] !== 0xff || (b[at + 1] & 0xe0) !== 0xe0) return null;
+  const version = (b[at + 1] >> 3) & 3;
+  const layer = (b[at + 1] >> 1) & 3;
+  const bitrateIndex = b[at + 2] >> 4;
+  const rateIndex = (b[at + 2] >> 2) & 3;
+  if (version === 1 || (layer !== 1 && layer !== 2) || bitrateIndex === 0 || bitrateIndex === 15 || rateIndex === 3) return null;
+  const mpeg1 = version === 3;
+  const rate = MPEG_RATES[version][rateIndex];
+  const bitrate = (mpeg1 ? (layer === 1 ? MPEG1_LAYER3 : MPEG1_LAYER2) : MPEG2_LAYERS23)[bitrateIndex] * 1000;
+  const samples = layer === 1 && !mpeg1 ? 576 : 1152;
+  const mono = b[at + 3] >> 6 === 3;
+  return {
+    rate,
+    bitrate,
+    samples,
+    length: Math.floor((samples / 8) * (bitrate / rate)) + ((b[at + 2] >> 1) & 1),
+    xing: layer === 1 ? at + 4 + (mpeg1 ? (mono ? 17 : 32) : mono ? 9 : 17) : null,
+  };
+}
+
+/** An MP3's length from its first frame at or after `start`: its Xing or VBRI frame count, else its bitrate. */
+async function mpegSeconds(read, size, start) {
+  const head = await read(start, Math.min(size, start + 64 * 1024));
+  // A frame is one whose next frame follows it, so stray bytes that look like a header don't count.
+  const at = head.findIndex((_, i) => {
+    const frame = mpegFrame(head, i);
+    return frame !== null && (i + frame.length + 4 > head.length || mpegFrame(head, i + frame.length) !== null);
+  });
+  if (at < 0) return null;
+  const frame = mpegFrame(head, at);
+  const tag = frame.xing !== null ? ascii(head, frame.xing, 4) : "";
+  if ((tag === "Xing" || tag === "Info") && be32(head, frame.xing + 4) & 1) return (be32(head, frame.xing + 8) * frame.samples) / frame.rate;
+  if (ascii(head, at + 36, 4) === "VBRI") return (be32(head, at + 36 + 14) * frame.samples) / frame.rate;
+  return ((size - start - at) * 8) / frame.bitrate;
+}
+
+/** FLAC's length from its STREAMINFO, the first metadata block: its total samples over its sample rate. */
+async function flacSeconds(read, start) {
+  const info = await read(start + 8, start + 26);
+  const rate = (info[10] << 12) | (info[11] << 4) | (info[12] >> 4);
+  const total = (info[13] & 0x0f) * 2 ** 32 + be32(info, 14);
+  return rate > 0 && total > 0 ? total / rate : null;
+}
+
+/** An Ogg Opus or Vorbis stream's length: the granule position of its last page, from the first page's rate. */
+async function oggSeconds(read, size, head) {
+  const serial = le32(head, 14);
+  const packet = head.subarray(27 + head[26]);
+  const opus = ascii(packet, 0, 8) === "OpusHead";
+  const rate = opus ? 48000 : packet[0] === 1 && ascii(packet, 1, 6) === "vorbis" ? le32(packet, 12) : 0;
+  if (!rate) return null;
+  const preSkip = opus ? le16(packet, 10) : 0;
+  const tail = await read(Math.max(0, size - 64 * 1024), size);
+  for (let at = tail.length - 27; at >= 0; at--) {
+    if (tail[at] !== 0x4f || ascii(tail, at, 4) !== "OggS" || le32(tail, at + 14) !== serial) continue;
+    const [low, high] = [le32(tail, at + 6), le32(tail, at + 10)];
+    // -1: no packet ends on that page.
+    if (low !== 0xffffffff || high !== 0xffffffff) return Math.max(0, high * 2 ** 32 + low - preSkip) / rate;
+  }
+  return null;
+}
+
+/** MP4's length from moov/mvhd: its duration over its timescale. */
+async function mp4Seconds(read, size) {
+  const moov = await findTop(read, size, 0, "moov");
+  const mvhd = moov && (await findTop(read, moov.at + moov.size, moov.at + moov.header, "mvhd"));
+  if (!mvhd) return null;
+  const box = await read(mvhd.at + mvhd.header, mvhd.at + mvhd.header + 32);
+  const v1 = box[0] === 1;
+  const scale = be32(box, v1 ? 20 : 12);
+  const length = v1 ? be32(box, 24) * 2 ** 32 + be32(box, 28) : be32(box, 16);
+  return scale > 0 ? length / scale : null;
+}
+
+/** WAV's length: its data chunk's bytes (as many as the file has) over the format's bytes per second. */
+async function wavSeconds(read, size) {
+  const chunk = (id) => findTop(read, size, 12, id, { littleEndian: true, pad: true });
+  const [format, data] = [await chunk("fmt "), await chunk("data")];
+  if (!format || !data) return null;
+  const byteRate = le32(await read(format.at + 8, format.at + 24), 8);
+  return byteRate > 0 ? Math.min(data.size, size - data.at - 8) / byteRate : null;
+}
+
+async function secondsOf(size, read) {
+  const first = await read(0, Math.min(size, 64 * 1024));
+  // An ID3v2 tag comes first in MP3s, and now and then in front of FLAC.
+  const start = ascii(first, 0, 3) === "ID3" ? 10 + syncsafe(first, 6) + (first[5] & 0x10 ? 10 : 0) : 0;
+  const head = start === 0 ? first : await read(start, Math.min(size, start + 64 * 1024));
+  if (ascii(head, 0, 4) === "fLaC") return flacSeconds(read, start);
+  if (start === 0 && ascii(head, 0, 4) === "OggS") return oggSeconds(read, size, head);
+  if (start === 0 && ascii(head, 4, 4) === "ftyp") return mp4Seconds(read, size);
+  if (start === 0 && ascii(head, 0, 4) === "RIFF" && ascii(head, 8, 4) === "WAVE") return wavSeconds(read, size);
+  return mpegSeconds(read, size, start);
+}
+
+/**
+ * How long an audio file ({ size, read(start, end) }, as for readTags) plays, in seconds, from its headers alone: MP3
+ * (its Xing or VBRI frame count, else its bitrate), FLAC, Ogg Opus and Vorbis, MP4 and WAV. An estimate, to tell
+ * whether decoding it whole is safe (SPEC §5.9); null for any other kind of file, or one that isn't what it seems.
+ */
+export async function readDuration({ size, read }) {
+  try {
+    const seconds = await secondsOf(size, read);
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+  } catch {
+    return null;
+  }
+}

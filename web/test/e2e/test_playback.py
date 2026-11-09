@@ -28,9 +28,9 @@ SECONDS = 2
 PACKAGE = "Tones"
 
 
-def tone(seconds: float, rate: int = 22050) -> bytes:
-    """A WAV of a 440 Hz sine: about three of the SDK's 64 KiB chunks for two seconds."""
-    samples = b"".join(struct.pack("<h", int(12000 * math.sin(2 * math.pi * 440 * i / rate))) for i in range(int(seconds * rate)))
+def tone(seconds: float, rate: int = 22050, amplitude: int = 12000) -> bytes:
+    """A WAV of a 440 Hz sine, its peak `amplitude` of 32767: about three of the SDK's 64 KiB chunks for two seconds."""
+    samples = b"".join(struct.pack("<h", int(amplitude * math.sin(2 * math.pi * 440 * i / rate))) for i in range(int(seconds * rate)))
     out = io.BytesIO()
     with wave.open(out, "wb") as w:
         w.setnchannels(1)

@@ -115,7 +115,7 @@ export function enterRecoveryKey({ intro, onSubmit, onError }) {
 
 // ---------------------------------------------------------------- settings (e2ee-store/sdk/SPEC.md §6.6–§6.11)
 
-export function settings({ host, passkeys, slots, lastCleanup, requestDetails, onRequestDetails, onAddPasskey, onSetUp, onDeletePasskey, onAddDevice, onReplaceRecoveryKey, onTestRecoveryKey, onResort, onCleanup, onCheckDuplicates, onBack, onError }) {
+export function settings({ host, passkeys, slots, lastCleanup, requestDetails, onRequestDetails, onAddPasskey, onSetUp, onDeletePasskey, onAddDevice, onReplaceRecoveryKey, onTestRecoveryKey, onResort, onMeasureLoudness, onCleanup, onCheckDuplicates, onBack, onError }) {
   const canUnlockCount = passkeys.filter((p) => slots.includes(p.id)).length;
   const passkeyRow = (p) => {
     const canUnlock = slots.includes(p.id);
@@ -162,6 +162,15 @@ export function settings({ host, passkeys, slots, lastCleanup, requestDetails, o
       "Artists",
       h("p", {}, "Every upload is sorted into artists and albums by itself. Sort again rebuilds them from all the packages, e.g. after an update that sorts differently."),
       h("div", { class: "actions" }, actionButton("Sort again", onResort, onError, { id: "resort" })),
+    ),
+    section(
+      "Loudness",
+      h(
+        "p",
+        {},
+        "Every track plays at about the same loudness: each one is measured as it's uploaded. Measure loudness measures the tracks that aren't yet, such as those uploaded before this came in: each is downloaded once, whole.",
+      ),
+      h("div", { class: "actions" }, actionButton("Measure loudness", onMeasureLoudness, onError, { id: "measure-loudness" })),
     ),
     section(
       "Storage",
@@ -237,6 +246,48 @@ export const confirmIdentity = ({ onConfirm, onCancel, onError }) =>
     h("p", {}, "This needs a recent login. Use your passkey to continue."),
     h("div", { class: "actions" }, actionButton("Use passkey", onConfirm, onError, { class: "primary", id: "confirm-identity" }), h("button", { type: "button", onclick: onCancel }, "Cancel")),
   );
+
+/** Measure loudness as it goes (SPEC §5.9): how many of `tracks` are done, how much of `bytes` is read; Stop. */
+export function loudnessProgress({ tracks, bytes, onStop }) {
+  const status = h("p", { id: "loudness-status", role: "status" }, `0 of ${tracks} tracks`);
+  const bar = h("progress", { id: "loudness-progress", max: 1, value: 0 });
+  return {
+    element: section(
+      "Measuring loudness",
+      status,
+      bar,
+      h("p", { class: "muted" }, "Each track is downloaded and measured on this device. What is measured is saved every so often: stopped, Measure loudness goes on from there."),
+      h("div", { class: "actions" }, h("button", { type: "button", id: "stop-loudness", onclick: onStop }, "Stop")),
+    ),
+    update: ({ done, read }) => {
+      status.textContent = `${done} of ${tracks} tracks · ${formatBytes(read)} of ${formatBytes(bytes)}`;
+      bar.value = bytes ? read / bytes : done / tracks;
+    },
+  };
+}
+
+/**
+ * What Measure loudness did: `results` ({ path, value } or { path, error }), `left` not reached, whether it `stopped`
+ * before the end, and the `error` that stopped it, if one did.
+ */
+export function loudnessReport({ results, left, stopped, error, onDone }) {
+  const line = (label, value, id) => h("li", {}, h("span", { class: "label" }, `${label}: `), h("span", { id }, String(value)));
+  const failed = results.filter((result) => result.error);
+  return section(
+    stopped ? "Measuring loudness stopped" : "Loudness measured",
+    h(
+      "ul",
+      { class: "report", id: "loudness-report" },
+      line("Measured", results.filter(({ value }) => value && value.lufs !== null).length, "loudness-measured"),
+      line("Too long to decode here, or silent: they play at the usual level", results.filter(({ value }) => value?.lufs === null).length, "loudness-unmeasured"),
+      line("Couldn't be decoded", failed.length, "loudness-failed"),
+      failed.map(({ path, error: why }) => h("li", { class: "error" }, `${path.join("/")}: ${why?.message ?? why}`)),
+      left > 0 && line("Not measured yet: Measure loudness goes on with them", left, "loudness-left"),
+      error && h("li", { class: "error" }, `Stopped: ${error}`),
+    ),
+    h("div", { class: "actions" }, h("button", { type: "button", id: "done", onclick: onDone }, "Done")),
+  );
+}
 
 export function cleanupProgress() {
   const status = h("p", { id: "cleanup-status" }, "Starting…");

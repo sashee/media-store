@@ -19,7 +19,7 @@ make check               # both packages and every check in the Nix sandbox (wha
 make package             # result/ = the backend, result-2/ = the frontend's static files
 ```
 
-`nix-build nix -A checks.<name>` runs one check: `web-unit`, `e2e-playback`, `e2e-upload`, `e2e-library`, `vm`, and e2ee-store's
+`nix-build nix -A checks.<name>` runs one check: `web-unit`, `e2e-playback`, `e2e-upload`, `e2e-library`, `e2e-loudness`, `vm`, and e2ee-store's
 `e2ee-store-sdk-unit`, `e2ee-store-browser` and `e2ee-store-vm-s3`, which this repository reruns with its own nixpkgs.
 Building the backend runs e2ee-store's Rust suite.
 
@@ -65,7 +65,7 @@ alice`.
 
 A host repository runs every check, with its own nixpkgs and its machine for the VM tests:
 `import "${media-store}/nix/tests" { inherit pkgs; machineModules = [ <host config> ]; }` gives one derivation per
-check: media-store's (`vm`, `web-unit`, `e2e-playback`, `e2e-upload`, `e2e-library`) and the e2ee-store ones it reruns
+check: media-store's (`vm`, `web-unit`, `e2e-playback`, `e2e-upload`, `e2e-library`, `e2e-loudness`) and the e2ee-store ones it reruns
 (`e2ee-store-*`).
 
 ## Status
