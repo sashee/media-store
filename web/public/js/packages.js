@@ -102,6 +102,21 @@ export async function packageFiles(list, name) {
   return (await walk(orEmpty(list), [...UPLOADS, name, FILES])).filter(({ entry }) => entry.kind === "file");
 }
 
+/**
+ * The packages' names, the most recently uploaded first: by when their package.json was last written, so a package
+ * completed later counts from then. One without a package.json comes last; at the same time, by name. `list` lists a
+ * folder.
+ */
+export async function packagesNewestFirst(list) {
+  const names = (await orEmpty(list)(UPLOADS)).filter((entry) => entry.kind === "dir").map((entry) => entry.name);
+  const written = async (name) => {
+    const doc = (await orEmpty(list)([...UPLOADS, name])).find((entry) => entry.name === PACKAGE_DOC && entry.kind === "file");
+    return { name, at: Date.parse(doc?.modified) || 0 };
+  };
+  const packages = await Promise.all(names.map(written));
+  return packages.toSorted((a, b) => b.at - a.at || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(({ name }) => name);
+}
+
 /** Every package, with its files: [{ name, files }], what sorting starts from. */
 export async function allPackages(list) {
   const names = (await orEmpty(list)(UPLOADS)).filter((entry) => entry.kind === "dir").map((entry) => entry.name);

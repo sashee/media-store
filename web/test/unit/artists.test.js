@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ARTISTS, sortArtists } from "../../public/js/artists.js";
+import { albumOf, ARTISTS, likelyAlbum, sortArtists } from "../../public/js/artists.js";
+import { trackOf } from "../../public/js/library.js";
 import { deletePackage, setSorting } from "../../public/js/packages.js";
 import { filesAt, storedTree } from "./stored-tree.js";
 
@@ -61,4 +62,36 @@ test("a large library sorts without running out of stack", async () => {
   const files = Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`uploads/P${i % 50}/files/${i}.mp3`, track({ artist: `A${i % 300}`, album: `B${i % 7}`, title: `T${i}` })]));
   const sorted = await sortArtists(storedTree(files));
   assert.equal(Object.keys(await filesAt(sorted, ARTISTS)).length, 5000);
+});
+
+/** The track at `path` in `tx`, as the player has it. */
+const trackAt = async (tx, path) => trackOf(await tx.entry(path), path.slice(0, -1));
+
+test("a track's likely album: the one it plays from, else where its own tags and sorting put it", () => {
+  const entry = (fields, sort) => ({ app: { tags: fields, ...(sort ? { sort } : {}) } });
+  assert.deepEqual(likelyAlbum(["artists", "X", "Y", "01 One.mp3"], entry({})), ["X", "Y"]);
+  assert.deepEqual(likelyAlbum(["uploads", "P", "files", "Folder", "a.mp3"], entry({ artist: "X" })), ["X", "Folder"]);
+  assert.deepEqual(likelyAlbum(["uploads", "P", "files", "a.mp3"], entry({}, { artist: "Someone" })), ["Someone", "P"]);
+  assert.deepEqual(likelyAlbum(["lists", "likes", "X - One.mp3"], entry({ artist: "X", album: "Y" })), ["X", "Y"]);
+  assert.equal(likelyAlbum(["lists", "likes", "One.mp3"], entry({ artist: "X" })), null, "nothing says which album");
+});
+
+test("the album a track is sorted into, wherever it plays from", async () => {
+  const sorted = await sortArtists(
+    storedTree({
+      "uploads/Album/files/01.mp3": track({ artist: "X", album: "Y", title: "One", track: 1 }),
+      "uploads/Album/files/02.mp3": track({ artist: "X", album: "Y", title: "Two", track: 2 }, { sha256: SHA(2) }),
+      "uploads/Again/files/b.mp3": track({ artist: "Other", album: "Z", title: "Two" }, { sha256: SHA(2) }),
+      "uploads/Mix/files/Disc/01 a.mp3": track({ artist: "M", album: "Tape", title: "A" }),
+      "uploads/Mix/files/Disc/02 b.mp3": track({}),
+      "lists/likes/X - One.mp3": track({ artist: "X", album: "Y", title: "One" }, { sha256: SHA(9) }),
+    }),
+  );
+  const albumAt = async (...path) => albumOf(sorted.list, await trackAt(sorted, path));
+  assert.deepEqual(await albumAt("artists", "X", "Y", "01 One.mp3"), ["artists", "X", "Y"]);
+  assert.deepEqual(await albumAt("uploads", "Album", "files", "01.mp3"), ["artists", "X", "Y"]);
+  assert.deepEqual(await albumAt("uploads", "Album", "files", "02.mp3"), ["artists", "Other", "Z"], "the same bytes, sorted once, where the other copy went");
+  assert.deepEqual(await albumAt("uploads", "Mix", "files", "Disc", "02 b.mp3"), ["artists", "M", "Tape"], "an untagged track with its folder's album");
+  assert.equal(await albumAt("lists", "likes", "X - One.mp3"), null, "bytes no package has");
+  assert.equal(await albumOf(storedTree({}).list, { name: "a.mp3", sha256: SHA(2) }), null, "no artists/ yet");
 });

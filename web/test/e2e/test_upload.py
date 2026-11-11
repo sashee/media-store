@@ -161,9 +161,11 @@ def run(browser, backend: Backend, port: int) -> None:
     expect(page.locator("#package-details")).to_contain_text("Files: 4")
     home(page)
     expect(page.locator("#packages li[data-package]")).to_have_count(3)
+    # The most recently uploaded first: not by name.
+    assert page.eval_on_selector_all("#packages li[data-package]", "items => items.map((li) => li.dataset.package)") == ["Release", "Folder Album", "Singles"]
     open_package(page, "Release", "files")
     expect(page.locator("#entries li")).to_have_count(4)
-    print("  ok    the same torrent again adds what its package lacked, nothing twice")
+    print("  ok    the same torrent again adds what its package lacked, nothing twice; the packages listed newest first")
 
     blobs = backend.blob_contents()
     for secret in [b"very-secret-key", b"tracklist", b"Release", b"RIFF", intro[5000:5032]]:

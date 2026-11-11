@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { NO_TAGS } from "../../public/js/tags.js";
-import { albumGroups, discOfPath, packageTargets, regroup, shownTarget, sortLibrary, sortTarget, treeChanges, UNKNOWN_ARTIST } from "../../public/js/sorting.js";
+import { albumGroups, artistOf, discOfPath, packageTargets, regroup, shownTarget, sortLibrary, sortTarget, treeChanges, UNKNOWN_ARTIST } from "../../public/js/sorting.js";
 
 const tags = (fields = {}) => ({ ...NO_TAGS, ...fields });
 const target = (fields, path, packageName = "Package") => shownTarget(sortTarget({ tags: tags(fields), path, packageName }));
@@ -36,6 +36,15 @@ test("slashes in tags read the same and can't make a folder", () => {
 test("what the user set wins over the tags and the folders", () => {
   const sorted = sortTarget({ tags: tags({ artist: "Wrong", album: "Album", title: "T", track: 1 }), path: ["x.mp3"], packageName: "P", sort: { artist: "Right/Here" } });
   assert.equal(shownTarget(sorted), "Right∕Here / Album / 01 T.mp3");
+});
+
+test("the artist a track shows: its artist, else its album artist, else the one the user set", () => {
+  const entry = (fields, sort) => ({ app: { tags: fields, ...(sort ? { sort } : {}) } });
+  assert.equal(artistOf(entry({ artist: "A", albumArtist: "B" }, { artist: "C" })), "A");
+  assert.equal(artistOf(entry({ albumArtist: "B" }, { artist: "C" })), "B");
+  assert.equal(artistOf(entry({}, { artist: "C" })), "C");
+  assert.equal(artistOf(entry({ artist: 7 })), "", "anything odd counts as no tag");
+  assert.equal(artistOf({}), "");
 });
 
 const file = (path, fields = {}, sort = {}) => ({ path, tags: tags(fields), sort });

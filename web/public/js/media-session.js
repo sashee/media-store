@@ -45,12 +45,15 @@ export function connectMediaSession(audio, { onPrevious, onNext, onStop, onError
   audio.addEventListener("pause", () => (session.playbackState = "paused"));
 }
 
+/** The notification's second line: the artist, then `status`, joined by " · ". */
+export const secondLine = (artist, status) => [artist, status].filter(Boolean).join(" · ");
+
 /**
- * Shows `track` as the one in the player; null for none. `status` goes where an artist would: what shuffle and repeat
- * are (queue.js), as the system's controls have no place of their own for them.
+ * Shows `track` ({ title, artist, album }) as the one in the player; null for none. `status` goes after the artist:
+ * whether it is liked, shuffle and repeat (queue.js), as the system's controls have no place of their own for them.
  */
 export function showTrack(track, status = "") {
   if (!supported()) return;
-  navigator.mediaSession.metadata = track ? new MediaMetadata({ title: track.title, artist: status }) : null;
+  navigator.mediaSession.metadata = track ? new MediaMetadata({ title: track.title, artist: secondLine(track.artist, status), album: track.album ?? "" }) : null;
   if (!track) navigator.mediaSession.playbackState = "none";
 }

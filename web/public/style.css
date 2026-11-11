@@ -252,22 +252,40 @@ main {
   border-top: 1px solid var(--border);
 }
 
-#player p {
-  margin: 0;
-  font-weight: bold;
+#open-album {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  border: none;
+  text-align: left;
+}
+
+#open-album span {
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+#now-playing {
+  font-weight: bold;
+}
+
+#now-artist {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+#now-artist:empty {
+  display: none;
 }
 
 #player .now {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-}
-
-#player .now p {
-  flex: 1;
 }
 
 #player #like,

@@ -102,6 +102,12 @@ export function entrySort(entry) {
   return Object.fromEntries(["artist", "album"].filter((key) => typeof sort[key] === "string" && sort[key].trim()).map((key) => [key, sort[key]]));
 }
 
+/** The artist a track (an entry, or library.js's trackOf) shows: its artist, else its album artist, else the one the user set; "" for none. */
+export function artistOf(entry) {
+  const tags = entryTags(entry);
+  return tags.artist || tags.albumArtist || entrySort(entry).artist || "";
+}
+
 /** A package's tracks, from its files ([{ path, entry }]), as packageTargets takes them, with their entries. */
 export const packageTracks = (files) =>
   files.filter(({ entry }) => entry.kind === "file" && isTrack({ name: entry.name, type: typeOfEntry(entry) })).map(({ path, entry }) => ({ path, entry, tags: entryTags(entry), sort: entrySort(entry) }));

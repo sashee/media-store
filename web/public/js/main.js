@@ -12,15 +12,15 @@ import { sha256Hex } from "../sdk/crypto.js";
 import { parseSetupFragment } from "../sdk/setup-link.js";
 import { TreeError } from "../sdk/tree.js";
 import { freeName, isAudio, isTrack, orEmpty, parsePlayUrl, playUrl, playUrlBlob, trackOf, typeOfEntry, unplayable, walk } from "./library.js";
-import { allPackages, defaultPackageName, deletePackage, FILES, PACKAGE_DOC, packageDoc, packageFiles, readPackageDoc, savePackage, setSorting, UPLOADS } from "./packages.js";
-import { ARTISTS, sortArtists } from "./artists.js";
+import { allPackages, defaultPackageName, deletePackage, FILES, PACKAGE_DOC, packageDoc, packageFiles, packagesNewestFirst, readPackageDoc, savePackage, setSorting, UPLOADS } from "./packages.js";
+import { albumOf, ARTISTS, sortArtists } from "./artists.js";
 import { isLiked, LIKES, like, newestFirst, notInPackages, onlyLiked, repointLikes, unlike } from "./likes.js";
 import { duplicates } from "./duplicates.js";
 import { DISLIKES, dislike, isDisliked, readDislikes, undislike } from "./dislikes.js";
 import { LOUDNESS, readLoudness, recordLoudness, toMeasure, volumeFor } from "./loudness.js";
 import { measureLoudness } from "./measure.js";
 import { findTrack, openResume, resumeKey, resumeState, sealResume, startAt } from "./resume.js";
-import { albumGroups, entryTags, packageTargets, packageTracks, regroup } from "./sorting.js";
+import { albumGroups, artistOf, entryTags, packageTargets, packageTracks, regroup } from "./sorting.js";
 import { filesInFolder, picked, planUpload, stored } from "./upload-plan.js";
 import { aheadBytes, forgetReads, nearEnd, NEXT_START_BYTES, playingNow, startPlayback } from "./player.js";
 import { offer, readWhole } from "./saving.js";
@@ -44,6 +44,7 @@ const settingsButton = document.getElementById("settings");
 const player = document.getElementById("player");
 const audio = document.getElementById("audio");
 const nowPlaying = document.getElementById("now-playing");
+const nowArtist = document.getElementById("now-artist");
 
 /** The unlocked session (flows.js), plus `rollback` when the library looked older than expected. */
 let session = null;
@@ -190,7 +191,8 @@ const playing = () => player.dataset.track ?? null;
 /** Whether the track in the player is liked; null while that isn't known yet (showLiked). */
 let playingLiked = null;
 
-const showPlaying = (track) => showTrack(track, statusLine({ ...mode, liked: playingLiked, disliked: skipped(track) }));
+const showPlaying = (track) =>
+  showTrack({ title: track.title, artist: artistOf(track), album: entryTags(track).album }, statusLine({ ...mode, liked: playingLiked, disliked: skipped(track) }));
 
 /** The track in the player, as the queue has it; null when none. */
 const playingTrack = () => listed.find((t) => t.name === playing()) ?? null;
@@ -214,6 +216,7 @@ function load(track, { at = 0, fetch = true } = {}) {
   player.dataset.track = track.name;
   player.hidden = false;
   nowPlaying.textContent = track.title;
+  nowArtist.textContent = artistOf(track);
   showPlaying(track);
   markPlaying();
   showLiked().catch(() => {});
@@ -357,8 +360,7 @@ async function toggleDislike() {
   const track = playingTrack();
   if (!track) return;
   const was = skipped(track);
-  const tags = entryTags(track);
-  await save(was ? [undislike(track.sha256)] : [dislike({ ...track, artist: tags.artist || tags.albumArtist }, Date.now()), unlike(track.sha256)]);
+  await save(was ? [undislike(track.sha256)] : [dislike({ ...track, artist: artistOf(track) }, Date.now()), unlike(track.sha256)]);
   await refreshDislikes();
   await showLiked();
   await markOpinions();
@@ -370,6 +372,17 @@ async function toggleDislike() {
   else stop();
 }
 dislikeButton.addEventListener("click", () => toggleDislike().catch(showError));
+
+/** Opens the album below artists/ the track playing is sorted into (SPEC §7.1); on its screen already, shows it again. */
+async function openPlayingAlbum() {
+  const track = playingTrack();
+  if (!track || !session) return;
+  const path = await albumOf(listing(), track);
+  if (!path) throw new UserFacingError(`"${track.title}" isn't sorted into any album.`);
+  const place = { screen: "browser", path };
+  await (JSON.stringify(history.state) === JSON.stringify(place) ? replace(place) : go(place));
+}
+document.getElementById("open-album").addEventListener("click", () => openPlayingAlbum().catch(showError));
 
 const shuffleButton = document.getElementById("shuffle");
 const repeatButton = document.getElementById("repeat");
@@ -939,7 +952,7 @@ addEventListener("popstate", (event) => {
 async function showHome() {
   show(
     libraryScreens.home({
-      packages: await packageNames(session),
+      packages: await packagesNewestFirst(listing()),
       onOpen: (name) => go({ screen: "browser", path: [...UPLOADS, name] }),
       onAdd: () => go({ screen: "add" }),
       onBrowse: () => go({ screen: "browser", path: [] }).catch(showError),
@@ -1057,10 +1070,7 @@ async function showLikes() {
   const lost = new Set(notInPackages(entries, await allPackages(listing())).map((entry) => [...LIKES, entry.name].join("/")));
   const tracks = entries
     .filter((e) => isAudio(e))
-    .map((e) => {
-      const tags = entryTags(e);
-      return { ...trackOf(e, LIKES), artist: tags.artist || tags.albumArtist, liked: e.modified };
-    });
+    .map((e) => ({ ...trackOf(e, LIKES), artist: artistOf(e), liked: e.modified }));
   const playable = tracks.filter((track) => !unplayable(track.type, canPlay));
   show(
     libraryScreens.likes({

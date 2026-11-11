@@ -312,7 +312,7 @@ def run(browser, backend: Backend, port: int) -> None:
 
     page.click("#shuffle")
     expect(page.locator("#shuffle")).to_have_attribute("aria-pressed", "true")
-    shows("♡ Not liked · Shuffle · Repeat all")
+    shows("Tester · ♡ Not liked · Shuffle · Repeat all")  # A one, the tagged one: its artist first
     titles = ["A one"]
     for _ in range(3):
         page.click("#next")

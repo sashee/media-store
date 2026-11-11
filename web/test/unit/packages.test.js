@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { begin, emptyRoot, uploads } from "../../public/sdk/tree.js";
-import { commonFolder, defaultPackageName, deletePackage, packageDoc, packagePaths, readPackageDoc, savePackage } from "../../public/js/packages.js";
+import { commonFolder, defaultPackageName, deletePackage, packageDoc, packagePaths, packagesNewestFirst, readPackageDoc, savePackage } from "../../public/js/packages.js";
+import { storedTree } from "./stored-tree.js";
 
 const NOW = Date.UTC(2026, 9, 25, 10, 0, 0);
 /** A transaction on an empty tree; nothing here reaches the I/O. */
@@ -73,4 +74,18 @@ test("completing a package adds to it under its own name; deleting one removes a
   assert.deepEqual(await names(completed, ["uploads", "Album", "files"]), ["a.flac", "b.flac"]);
   assert.deepEqual(await names(await deletePackage("Album")(completed), []), ["uploads"]);
   assert.deepEqual(await names(await deletePackage("Album")(completed), ["uploads"]), []);
+});
+
+test("packages are listed the most recently uploaded first, by when their package.json was written", async () => {
+  const at = (day) => ({ modified: `2026-10-${day}T00:00:00.000Z` });
+  const tx = storedTree({
+    "uploads/Old/package.json": at(10),
+    "uploads/Old/files/a.mp3": at(28),
+    "uploads/New/package.json": at(20),
+    "uploads/B same/package.json": at(15),
+    "uploads/A same/package.json": at(15),
+    "uploads/No doc/files/a.mp3": at(30),
+  });
+  assert.deepEqual(await packagesNewestFirst(tx.list), ["New", "A same", "B same", "Old", "No doc"]);
+  assert.deepEqual(await packagesNewestFirst(fresh().list), [], "nothing uploaded yet");
 });

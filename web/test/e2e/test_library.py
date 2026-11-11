@@ -116,11 +116,12 @@ def run(browser, backend: Backend, port: int) -> None:
     artists(page, "Band", "Debut")
     page.click("#play-all")
     expect(page.locator("#now-playing")).to_have_text("Opening")
+    expect(page.locator("#now-artist")).to_have_text("Band")
     expect(page.locator("#like")).to_have_attribute("aria-pressed", "false")
     page.click("#like")
     expect(page.locator("#like")).to_have_attribute("aria-pressed", "true")
-    # The notification says it too, so a like needn't be looked up in the app.
-    page.wait_for_function("() => navigator.mediaSession.metadata?.artist === '♥ Liked'")
+    # The notification says it too, after the artist, so a like needn't be looked up in the app.
+    page.wait_for_function("() => navigator.mediaSession.metadata?.artist === 'Band · ♥ Liked'")
     page.click("#next")
     expect(page.locator("#now-playing")).to_have_text("02 Second")
     expect(page.locator("#like")).to_have_attribute("aria-pressed", "false")
@@ -135,6 +136,18 @@ def run(browser, backend: Backend, port: int) -> None:
     expect(page.locator("#likes li[data-like]")).to_have_count(1)
     expect(page.locator("#like")).to_have_attribute("aria-pressed", "true")
     print("  ok    likes: ♡ in the player, newest first, unliking")
+
+    # --- the player's title opens the track's album, wherever it plays from: here an untagged like
+    page.locator("#likes li[data-like='02 Second.wav'] button[data-action='play']").click()
+    expect(page.locator("#now-playing")).to_have_text("02 Second")
+    expect(page.locator("#now-artist")).to_be_hidden()  # no artist tag
+    page.evaluate("document.getElementById('audio').pause()")
+    page.click("#open-album")
+    expect(page.locator("#breadcrumbs .crumb").last).to_have_text("Debut")
+    assert names(page) == ["01 Opening.wav", "02 Second.wav", "cover.jpg"], names(page)
+    page.go_back()
+    page.wait_for_selector("#likes-screen")
+    print("  ok    a tap on the player's title opens the album the track is sorted into; back goes back")
 
     # --- only the liked ones of an album, or of an artist: Play likes, where there are any
     assert artists(page, "Band", "Debut") == ["01 Opening.wav", "02 Second.wav", "cover.jpg"]
@@ -169,7 +182,7 @@ def run(browser, backend: Backend, port: int) -> None:
     play_button(page, "01 Opening.wav").click()  # on purpose: it plays
     expect(page.locator("#now-playing")).to_have_text("Opening")
     expect(page.locator("#dislike")).to_have_attribute("aria-pressed", "true")
-    page.wait_for_function("() => navigator.mediaSession.metadata?.artist === '👎 Disliked'")
+    page.wait_for_function("() => navigator.mediaSession.metadata?.artist === 'Band · 👎 Disliked'")
     assert opinions(page) == {"01 Opening.wav": "disliked", "02 Second.wav": "liked", "cover.jpg": None}, opinions(page)
     page.click("#like")  # from the player: the browser's mark follows, in place
     expect(page.locator("#entries li[data-entry='01 Opening.wav'] .opinion")).to_have_attribute("data-opinion", "liked")

@@ -25,7 +25,11 @@
     <!-- Outside #app, so playback goes on while other screens show. -->
     <footer id="player" hidden>
       <div class="now">
-        <p id="now-playing"></p>
+        <!-- A tap opens the track's album. -->
+        <button type="button" id="open-album" title="Open the album">
+          <span id="now-playing"></span>
+          <span id="now-artist"></span>
+        </button>
         <button type="button" id="like" aria-label="Like" aria-pressed="false">♡</button>
         <button type="button" id="dislike" aria-label="Dislike" aria-pressed="false">👎</button>
       </div>

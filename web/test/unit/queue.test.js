@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { secondLine } from "../../public/js/media-session.js";
 import { after, keptOrder, nextRepeat, previous, queueOf, REPEAT_MODES, RESTART_AFTER_S, shuffled, shuffleOrder, skipping, statusLine } from "../../public/js/queue.js";
 
 const queue = ["a", "b", "c"].map((name) => ({ name }));
@@ -62,6 +63,13 @@ test("the notification's line says what is on, and nothing when nothing is", () 
   assert.equal(statusLine({ shuffle: true, repeat: "all", liked: true }), "♥ Liked · Shuffle · Repeat all");
   assert.equal(statusLine({ shuffle: false, repeat: "off", liked: false }), "♡ Not liked");
   assert.equal(statusLine({ shuffle: false, repeat: "off", liked: null }), "", "not known yet: nothing said");
+});
+
+test("the notification's second line: the artist, then the status", () => {
+  assert.equal(secondLine("Band", "♥ Liked · Shuffle"), "Band · ♥ Liked · Shuffle");
+  assert.equal(secondLine("Band", ""), "Band");
+  assert.equal(secondLine("", "♡ Not liked"), "♡ Not liked");
+  assert.equal(secondLine("", ""), "");
 });
 
 test("next and previous go past disliked tracks, but not past the one played on purpose", () => {
