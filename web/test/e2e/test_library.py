@@ -3,7 +3,7 @@ Chromium as in test_playback.py.
 
   a tagged album with an untagged track and a cover → its albums in the preview → artists/ after the upload
   → an untagged package, its album set in the preview → the same bytes again, sorted once → an album set afterwards
-  → playing from the artists → likes, newest first, unliking → deleting a package: its copies go, a duplicate comes
+  → an artist's albums newest first, with their years, one set on its package's page → playing from the artists → likes, newest first, unliking → deleting a package: its copies go, a duplicate comes
   back, a liked track stays in Likes, apart → that track uploaded again: its like takes the new copy, and the
   duplicate check finds nothing stored twice → sorting again (in the settings) changes nothing
 
@@ -32,13 +32,20 @@ def artists(page, *path: str) -> list[str]:
     return names(page)
 
 
-def set_album(page, albums: str, group: str, artist: str, album: str) -> None:
-    """In the albums list `albums` (an id), sets the album `group` ("Artist / Album") to `artist` and `album`."""
+def set_album(page, albums: str, group: str, artist: str, album: str, year: str | None = None) -> None:
+    """In the albums list `albums` (an id), sets the album `group` ("Artist / Album") to `artist`, `album` and `year`."""
     row = page.locator(f"#{albums} li[data-album='{group}']")
     row.locator("button[data-action='edit-album']").click()
     row.locator(".album-artist").fill(artist)
     row.locator(".album-name").fill(album)
+    if year is not None:
+        row.locator(".album-year").fill(year)
     row.locator("button[data-action='save-album']").click()
+
+
+def year_of(page, name: str):
+    """The year beside the folder `name` on screen."""
+    return page.locator(f"#entries li[data-entry='{name}'] .year")
 
 
 def albums(page, albums: str) -> list[str]:
@@ -111,6 +118,25 @@ def run(browser, backend: Backend, port: int) -> None:
     assert albums(page, "package-albums") == ["DJ Someone / Tape Two"]
     assert artists(page, "DJ Someone") == ["Tape Two"]
     print("  ok    an album set on the package's page moves its tracks, and the old album goes")
+
+    # --- an artist's albums, newest first, each with its year: from the tags, or set on a package's page
+    home(page)
+    upload(page, [("01 Late.wav", tagged(tone(2), title="Late", artist="Band", album="Later", year="2010"), "audio/wav")], name="Later release")
+    expect(page.locator("#package-albums li[data-album='Band / Later'] .year")).to_have_text("2010")
+    assert artists(page, "Band") == ["Later", "Debut"], names(page)  # Debut's tags say no year: last
+    expect(year_of(page, "Later")).to_have_text("2010")
+    expect(year_of(page, "Debut")).to_have_count(0)
+    page.click("#play-all")
+    expect(page.locator("#now-playing")).to_have_text("Late")  # in the order shown
+    page.evaluate("document.getElementById('audio').pause()")
+    home(page)
+    open_package(page, "Debut release")
+    set_album(page, "package-albums", "Band / Debut", "Band", "Debut", "2012")
+    expect(page.locator("#notice")).to_contain_text("Set where the tracks of")
+    expect(page.locator("#package-albums li[data-album='Band / Debut'] .year")).to_have_text("2012")
+    assert artists(page, "Band") == ["Debut", "Later"], names(page)
+    expect(year_of(page, "Debut")).to_have_text("2012")
+    print("  ok    an artist's albums show newest first, with their years, from the tags or set on the package's page")
 
     # --- playing from the artists, and likes
     artists(page, "Band", "Debut")

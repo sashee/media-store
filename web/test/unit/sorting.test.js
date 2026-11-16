@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { NO_TAGS } from "../../public/js/tags.js";
-import { albumGroups, artistOf, discOfPath, packageTargets, regroup, shownTarget, sortLibrary, sortTarget, treeChanges, UNKNOWN_ARTIST } from "../../public/js/sorting.js";
+import { albumGroups, albumYear, albumYears, artistOf, byYear, discOfPath, entrySort, packageTargets, regroup, shownTarget, sortLibrary, sortTarget, treeChanges, typedYear, UNKNOWN_ARTIST, yearInName } from "../../public/js/sorting.js";
 
 const tags = (fields = {}) => ({ ...NO_TAGS, ...fields });
 const target = (fields, path, packageName = "Package") => shownTarget(sortTarget({ tags: tags(fields), path, packageName }));
@@ -72,7 +72,7 @@ test("a package's untagged tracks get the artist and album their folder's tagged
 test("albums are grouped in the order they come; setting one keeps only what differs from the tags", () => {
   const files = [file(["01.mp3"], { artist: "X", album: "Y" }), file(["02.mp3"]), file(["other", "03.mp3"], { artist: "Z", album: "W" })];
   const targets = packageTargets({ packageName: "P", files });
-  assert.deepEqual(albumGroups(targets), [{ artist: "X", album: "Y", tracks: 2 }, { artist: "Z", album: "W", tracks: 1 }]);
+  assert.deepEqual(albumGroups(targets, files), [{ artist: "X", album: "Y", year: null, tracks: 2 }, { artist: "Z", album: "W", year: null, tracks: 1 }]);
 
   const set = regroup({ packageName: "P", files, group: { artist: "X", album: "Y" }, to: { artist: "Someone", album: "Y" } });
   assert.deepEqual(set.map((f) => f.sort), [{ artist: "Someone" }, { artist: "Someone" }, {}]);
@@ -81,6 +81,50 @@ test("albums are grouped in the order they come; setting one keeps only what dif
   const back = regroup({ packageName: "P", files: set, group: { artist: "Someone", album: "Y" }, to: { artist: "", album: "" } });
   assert.deepEqual(back.map((f) => f.sort), [{}, {}, {}], "empty fields go back to the tags'");
   assert.deepEqual(regroup({ packageName: "P", files, group: { artist: "Z", album: "W" }, to: { artist: "Z", album: "W/2" } })[2].sort, { album: "W/2" });
+});
+
+test("an album's year: what the user set, else the original year, else the year, the one most tracks say; else its name's", () => {
+  const track = (tags_ = {}, sort = {}) => ({ tags: tags(tags_), sort });
+  assert.equal(albumYear([track({ year: 2011 }), track({ year: 2011 }), track({ year: 1973 })], "X"), 2011, "the one most say");
+  assert.equal(albumYear([track({ year: 2011 }), track({ year: 1973 })], "X"), 1973, "a tie: the earliest");
+  assert.equal(albumYear([track({ year: 2011, originalYear: 1973 }), track({ year: 2011 }), track({ year: 2011 })], "X"), 1973, "a reissue: its original year");
+  assert.equal(albumYear([track({ year: 2011, originalYear: 1973 }, { year: 1974 }), track({ year: 2011 })], "X"), 1974, "what the user set wins");
+  assert.equal(albumYear([track(), track()], "1999 - First"), 1999, "no tags: the year its name starts with");
+  assert.equal(albumYear([track({ year: 2001 })], "1999 - First"), 2001, "the tags before the name");
+  assert.equal(albumYear([], "First"), null);
+
+  assert.deepEqual(["1999 - First", "(1999) First", "[2003] Second", "2003. Third", "1984", "2112 - Overture", "First 1999", "19999 - X"].map(yearInName), [1999, 1999, 2003, 2003, null, null, null, null]);
+  assert.deepEqual(["1999", " 2003 ", "", "99", "abcd", "19999", null].map(typedYear), [1999, 2003, null, null, null, null, null]);
+  assert.deepEqual(entrySort({ app: { sort: { album: "A", year: 1999 } } }), { album: "A", year: 1999 });
+  assert.deepEqual(entrySort({ app: { sort: { year: "1999" } } }), {}, "a year that isn't a number isn't one");
+});
+
+test("an artist's albums show newest first, those of no known year last, each as they came", () => {
+  const entry = (name, fields = {}, sort) => ({ kind: "file", name, app: { type: "audio/mpeg", tags: tags(fields), ...(sort ? { sort } : {}) } });
+  const albums = [
+    { name: "1999 - First", entries: [entry("01.mp3"), { kind: "file", name: "cover.jpg", app: { type: "image/jpeg" } }] },
+    { name: "Live", entries: [entry("01.mp3")] },
+    { name: "Second", entries: [entry("01.mp3", { year: 2011, originalYear: 2003 }), entry("02.mp3", { year: 2011 })] },
+    { name: "Bootleg", entries: [entry("01.mp3")] },
+    { name: "Third", entries: [entry("01.mp3", { year: 2005 }, { year: 2010 })] },
+  ];
+  const years = albumYears(albums);
+  assert.deepEqual([...years], [["1999 - First", 1999], ["Live", null], ["Second", 2003], ["Bootleg", null], ["Third", 2010]]);
+  const dirs = albums.map(({ name }) => ({ kind: "dir", name }));
+  assert.deepEqual(byYear(dirs, years).map((d) => d.name), ["Third", "Second", "1999 - First", "Live", "Bootleg"]);
+});
+
+test("setting an album's year keeps it on its tracks, only where it differs from what they say by themselves", () => {
+  const files = [file(["A", "01.mp3"], { artist: "X", album: "A", year: 2001 }), file(["A", "02.mp3"], { artist: "X", album: "A", year: 2001 }), file(["B", "01.mp3"], { artist: "X", album: "B" })];
+  const set = regroup({ packageName: "P", files, group: { artist: "X", album: "A" }, to: { artist: "X", album: "A", year: "1999" } });
+  assert.deepEqual(set.map((f) => f.sort), [{ year: 1999 }, { year: 1999 }, {}]);
+  assert.deepEqual(albumGroups(packageTargets({ packageName: "P", files: set }), set).map((g) => g.year), [1999, null]);
+  assert.deepEqual(regroup({ packageName: "P", files: set, group: { artist: "X", album: "A" }, to: { artist: "X", album: "A", year: "2001" } }).map((f) => f.sort), [{}, {}, {}], "set back to the tags'");
+  assert.deepEqual(regroup({ packageName: "P", files: set, group: { artist: "X", album: "A" }, to: { artist: "X", album: "A", year: "" } }).map((f) => f.sort), [{}, {}, {}], "emptied");
+  const renamed = regroup({ packageName: "P", files: set, group: { artist: "X", album: "A" }, to: { artist: "Y", album: "A", year: "1999" } });
+  assert.deepEqual(renamed.map((f) => f.sort), [{ artist: "Y", year: 1999 }, { artist: "Y", year: 1999 }, {}], "kept as the artist changes");
+  const untagged = [file(["1999 - First", "01.mp3"])];
+  assert.deepEqual(regroup({ packageName: "P", files: untagged, group: { artist: UNKNOWN_ARTIST, album: "1999 - First" }, to: { artist: "", album: "", year: "1999" } })[0].sort, {}, "its name says it");
 });
 
 const ID = (n) => n.toString(16).padStart(64, "0");

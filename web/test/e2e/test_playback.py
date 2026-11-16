@@ -41,11 +41,11 @@ def tone(seconds: float, rate: int = 22050, amplitude: int = 12000) -> bytes:
 
 
 def tagged(wav: bytes, **fields: str) -> bytes:
-    """`wav` with a RIFF LIST/INFO chunk of tags: INAM (title), IART (artist), IPRD (album), ITRK (track)."""
+    """`wav` with a RIFF LIST/INFO chunk of tags: INAM (title), IART (artist), IPRD (album), ITRK (track), ICRD (year)."""
     def chunk(chunk_id: bytes, data: bytes) -> bytes:
         return chunk_id + struct.pack("<I", len(data)) + data + (b"\0" if len(data) % 2 else b"")
 
-    ids = {"title": b"INAM", "artist": b"IART", "album": b"IPRD", "track": b"ITRK"}
+    ids = {"title": b"INAM", "artist": b"IART", "album": b"IPRD", "track": b"ITRK", "year": b"ICRD"}
     info = chunk(b"LIST", b"INFO" + b"".join(chunk(ids[key], value.encode() + b"\0") for key, value in fields.items()))
     body = wav[8:] + info
     return b"RIFF" + struct.pack("<I", len(body)) + body

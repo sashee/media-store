@@ -1,4 +1,4 @@
-// Tags inside audio files (SPEC §5.3): title, artist, album artist, album, track and disc numbers, and year, for
+// Tags inside audio files (SPEC §5.3): title, artist, album artist, album, track and disc numbers, year and original year, for
 // sorting. Read in the browser, from only the parts of a file that hold them: ID3v2 (and ID3v1) for MP3, FLAC's Vorbis
 // comment, Ogg Vorbis and Opus comments, MP4's ilst atoms, and RIFF INFO for WAV. Untrusted input: anything malformed
 // yields no tags rather than an error, and nothing is read past MAX_TAG bytes.
@@ -13,7 +13,7 @@ const be32 = (b, at) => ((b[at] << 24) >>> 0) + (b[at + 1] << 16) + (b[at + 2] <
 const le32 = (b, at) => b[at] + (b[at + 1] << 8) + (b[at + 2] << 16) + ((b[at + 3] << 24) >>> 0);
 const syncsafe = (b, at) => (b[at] << 21) | (b[at + 1] << 14) | (b[at + 2] << 7) | b[at + 3];
 
-export const NO_TAGS = Object.freeze({ title: "", artist: "", albumArtist: "", album: "", track: null, trackTotal: null, disc: null, discTotal: null, year: null });
+export const NO_TAGS = Object.freeze({ title: "", artist: "", albumArtist: "", album: "", track: null, trackTotal: null, disc: null, discTotal: null, year: null, originalYear: null });
 
 /** "3/12" → { n: 3, total: 12 }; anything else → nulls. */
 function numberPair(value) {
@@ -26,7 +26,7 @@ const yearOf = (value) => {
   return match ? Number(match[1]) : null;
 };
 
-/** The tags from raw fields: { title, artist, albumArtist, album, track ("3/12"), disc, date }. */
+/** The tags from raw fields: { title, artist, albumArtist, album, track ("3/12"), disc, date, originalDate }. */
 export function tagsOf(fields) {
   const clean = (value) => String(value ?? "").replace(/\u0000+$/g, "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 300);
   const track = numberPair(fields.track);
@@ -41,6 +41,7 @@ export function tagsOf(fields) {
     disc: disc.n,
     discTotal: fields.discTotal ?? disc.total,
     year: yearOf(fields.date),
+    originalYear: yearOf(fields.originalDate),
   };
 }
 
@@ -76,7 +77,8 @@ function resync(bytes) {
 
 const ID3_FIELDS = {
   TIT2: "title", TPE1: "artist", TPE2: "albumArtist", TALB: "album", TRCK: "track", TPOS: "disc", TDRC: "date", TYER: "date",
-  TT2: "title", TP1: "artist", TP2: "albumArtist", TAL: "album", TRK: "track", TPA: "disc", TYE: "date",
+  TDOR: "originalDate", TORY: "originalDate",
+  TT2: "title", TP1: "artist", TP2: "albumArtist", TAL: "album", TRK: "track", TPA: "disc", TYE: "date", TOR: "originalDate",
 };
 
 /** The fields of an ID3v2 tag: `tag` is the whole of it, header included. */
@@ -119,7 +121,7 @@ export function parseId3v1(bytes) {
 
 // ---------------------------------------------------------------- Vorbis comments (FLAC, Ogg Vorbis, Opus)
 
-const VORBIS_FIELDS = { TITLE: "title", ARTIST: "artist", ALBUMARTIST: "albumArtist", "ALBUM ARTIST": "albumArtist", ALBUM: "album", TRACKNUMBER: "track", DISCNUMBER: "disc", DATE: "date", YEAR: "date", TRACKTOTAL: "trackTotal", TOTALTRACKS: "trackTotal", DISCTOTAL: "discTotal", TOTALDISCS: "discTotal" };
+const VORBIS_FIELDS = { TITLE: "title", ARTIST: "artist", ALBUMARTIST: "albumArtist", "ALBUM ARTIST": "albumArtist", ALBUM: "album", TRACKNUMBER: "track", DISCNUMBER: "disc", DATE: "date", YEAR: "date", ORIGINALDATE: "originalDate", ORIGINALYEAR: "originalDate", TRACKTOTAL: "trackTotal", TOTALTRACKS: "trackTotal", DISCTOTAL: "discTotal", TOTALDISCS: "discTotal" };
 
 /** The fields of a Vorbis comment block: a vendor string, then KEY=value pairs, all little-endian lengths. */
 export function parseVorbisComment(bytes) {

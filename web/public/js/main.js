@@ -13,14 +13,14 @@ import { parseSetupFragment } from "../sdk/setup-link.js";
 import { TreeError } from "../sdk/tree.js";
 import { freeName, isAudio, isTrack, orEmpty, parsePlayUrl, playUrl, playUrlBlob, trackOf, typeOfEntry, unplayable, walk } from "./library.js";
 import { allPackages, defaultPackageName, deletePackage, FILES, PACKAGE_DOC, packageDoc, packageFiles, packagesNewestFirst, readPackageDoc, savePackage, setSorting, UPLOADS } from "./packages.js";
-import { albumOf, ARTISTS, sortArtists } from "./artists.js";
+import { albumOf, ARTISTS, isArtistFolder, sortArtists } from "./artists.js";
 import { isLiked, LIKES, like, newestFirst, notInPackages, onlyLiked, repointLikes, unlike } from "./likes.js";
 import { duplicates } from "./duplicates.js";
 import { DISLIKES, dislike, isDisliked, readDislikes, undislike } from "./dislikes.js";
 import { LOUDNESS, readLoudness, recordLoudness, toMeasure, volumeFor } from "./loudness.js";
 import { measureLoudness } from "./measure.js";
 import { findTrack, openResume, resumeKey, resumeState, sealResume, startAt } from "./resume.js";
-import { albumGroups, artistOf, entryTags, packageTargets, packageTracks, regroup } from "./sorting.js";
+import { albumGroups, albumYears, artistOf, byYear, entryTags, packageTargets, packageTracks, regroup } from "./sorting.js";
 import { filesInFolder, picked, planUpload, stored } from "./upload-plan.js";
 import { aheadBytes, forgetReads, nearEnd, NEXT_START_BYTES, playingNow, startPlayback } from "./player.js";
 import { offer, readWhole } from "./saving.js";
@@ -891,9 +891,21 @@ async function filesBelow(s, path, at = []) {
   return nested.flat();
 }
 
+/**
+ * The entries at `path` in the order the browser shows them, with the years of its folders: an artist's albums newest
+ * first (SPEC §5.5), read from the tracks in each; other folders as listed, with no years. Folders read once are cached.
+ */
+async function folderAt(s, path) {
+  const entries = await flows.list(s, path);
+  if (!isArtistFolder(path)) return { entries, years: new Map() };
+  const albums = await Promise.all(entries.filter((e) => e.kind === "dir").map(async (e) => ({ name: e.name, entries: await flows.list(s, [...path, e.name]) })));
+  const years = albumYears(albums);
+  return { entries: byYear(entries, years), years };
+}
+
 /** The tracks below `path` this browser plays, in the order the browser lists them, folder by folder. */
 async function tracksBelow(s, path) {
-  const entries = await flows.list(s, path);
+  const { entries } = await folderAt(s, path);
   const nested = await Promise.all(entries.map((e) => (e.kind === "dir" ? tracksBelow(s, [...path, e.name]) : isAudio(e) && !unplayable(typeOfEntry(e), canPlay) ? [trackOf(e, path)] : [])));
   return nested.flat();
 }
@@ -972,7 +984,7 @@ async function packageTargetsOf(name) {
 }
 
 async function showBrowser(path) {
-  const entries = await flows.list(session, path);
+  const { entries, years } = await folderAt(session, path);
   const inPackage = path[0] === UPLOADS[0] && path.length >= 2;
   const playable = entries.filter((e) => isAudio(e) && !unplayable(typeOfEntry(e), canPlay));
   const sorting = inPackage && (path.length === 2 || path[2] === FILES) ? await packageTargetsOf(path[1]) : null;
@@ -983,7 +995,8 @@ async function showBrowser(path) {
       path,
       entries,
       details: inPackage && path.length === 2 ? await packageDocOf(session, path[1]) : null,
-      albums: inPackage && path.length === 2 ? albumGroups(sorting.targets) : null,
+      albums: inPackage && path.length === 2 ? albumGroups(sorting.targets, sorting.tracks) : null,
+      years,
       targets,
       tracks: playable.map((e) => e.name),
       playing: playing(),

@@ -42,8 +42,9 @@ export function home({ packages, onOpen, onAdd, onBrowse, onArtists, onLikes, on
 // ---------------------------------------------------------------- albums
 
 /**
- * The albums a package's tracks go to (sorting.js's albumGroups), each with Edit: its artist and album, as typed, an
- * empty field going back to what the tags and folders say. `onSave(group, { artist, album })` sets them.
+ * The albums a package's tracks go to (sorting.js's albumGroups), each with its year and Edit: its artist, album and
+ * year, as typed, an empty field going back to what the tags and folders say. `onSave(group, { artist, album, year })`
+ * sets them.
  */
 function albums({ id, groups, onSave, onError }) {
   const row = (group) => {
@@ -52,18 +53,29 @@ function albums({ id, groups, onSave, onError }) {
       li.replaceChildren(
         h("span", { class: "row-main" }, h("strong", {}, group.artist), " / ", group.album),
         h("button", { type: "button", "data-action": "edit-album", onclick: edit }, "Edit"),
+        group.year && h("span", { class: "muted year" }, String(group.year)),
         h("span", { class: "muted" }, group.tracks === 1 ? "1 track" : `${group.tracks} tracks`),
       );
     const edit = () => {
       const artist = h("input", { class: "album-artist", value: group.artist, maxlength: 200 });
       const album = h("input", { class: "album-name", value: group.album, maxlength: 200 });
-      const saveButton = actionButton("Save", () => onSave(group, { artist: artist.value, album: album.value }), onError, { class: "primary", "data-action": "save-album" });
+      const year = h("input", { class: "album-year", value: group.year ?? "", inputmode: "numeric", pattern: "\\d{4}", maxlength: 4, size: 4, placeholder: "YYYY" });
+      const saveButton = actionButton(
+        "Save",
+        async () => {
+          if (!year.reportValidity()) return;
+          await onSave(group, { artist: artist.value, album: album.value, year: year.value });
+        },
+        onError,
+        { class: "primary", "data-action": "save-album" },
+      );
       li.replaceChildren(
         h(
           "form",
           { class: "album-form", onsubmit: (event) => (event.preventDefault(), saveButton.click()) },
           h("label", {}, "Artist", artist),
           h("label", {}, "Album", album),
+          h("label", {}, "Year", year),
           h("p", { class: "muted" }, "Leave a field empty for what the tags say."),
           h("div", { class: "actions" }, saveButton, h("button", { type: "button", onclick: view }, "Cancel")),
         ),
@@ -153,10 +165,11 @@ export function addMusic({ folderInput: folderPicks, pickFolder, prepare, onUplo
     const sorted = () => current.rows.filter((row) => row.tags && stored(row));
     const render = () => {
       const tracks = sorted();
-      const targets = packageTargets({ packageName: packageName(), files: tracks.map((row) => ({ path: row.path, tags: row.tags, sort: row.sort ?? {} })) });
+      const files = tracks.map((row) => ({ path: row.path, tags: row.tags, sort: row.sort ?? {} }));
+      const targets = packageTargets({ packageName: packageName(), files });
       const targetOf = new Map(tracks.map((row, i) => [row, targets[i]]));
       rows.replaceChildren(...current.rows.map((row) => planRow(row, targetOf.get(row) ?? null)));
-      groups.replaceChildren(albums({ id: "upload-albums", groups: albumGroups(targets), onSave: setAlbum, onError }));
+      groups.replaceChildren(albums({ id: "upload-albums", groups: albumGroups(targets, files), onSave: setAlbum, onError }));
     };
     const setAlbum = async (group, to) => {
       const tracks = sorted();
@@ -243,15 +256,22 @@ const shown = (path) => (path.length ? path.join(" / ") : "Library");
  * A directory of the tree: breadcrumbs, its entries, and for a package its package.json and its albums. `targets` maps
  * a file's name to where it is sorted; `tracks` are the names of its playable files; `playing` is the path of the
  * track in the player; `opinionOf(sha256)` says whether a file's bytes are "liked", "disliked" or neither (null).
- * `albums` (a package's, or null) can be set with `onSetAlbum(group, { artist, album })`. Every file can be saved to
- * the device with `onDownload(name, onProgress)`, `onProgress(bytes)` saying how much is read.
+ * `albums` (a package's, or null) can be set with `onSetAlbum(group, { artist, album, year })`. `years` maps a folder's
+ * name to its year, shown beside it: an artist's albums'. Every file can be saved to the device with
+ * `onDownload(name, onProgress)`, `onProgress(bytes)` saying how much is read.
  */
-export function browser({ path, entries, details, albums: groups = null, targets, tracks, playing, opinionOf, onHome, onOpen, onPlay, onPlayAll, onPlayLiked, onDelete, onSetAlbum, onDownload, onError }) {
+export function browser({ path, entries, details, albums: groups = null, years = new Map(), targets, tracks, playing, opinionOf, onHome, onOpen, onPlay, onPlayAll, onPlayLiked, onDelete, onSetAlbum, onDownload, onError }) {
   const crumbs = [[], ...path.map((_, i) => path.slice(0, i + 1))];
   const row = (entry) => {
     const full = [...path, entry.name].join("/");
     if (entry.kind === "dir") {
-      return h("li", { "data-entry": entry.name }, h("button", { type: "button", class: "row-main", onclick: () => onOpen([...path, entry.name]).catch(onError) }, "📁 ", entry.name));
+      const year = years.get(entry.name);
+      return h(
+        "li",
+        { "data-entry": entry.name },
+        h("button", { type: "button", class: "row-main", onclick: () => onOpen([...path, entry.name]).catch(onError) }, "📁 ", entry.name),
+        year && h("span", { class: "muted year" }, String(year)),
+      );
     }
     const target = targets.get(entry.name);
     const playable = tracks.includes(entry.name);
@@ -279,7 +299,7 @@ export function browser({ path, entries, details, albums: groups = null, targets
     groups &&
       section(
         "Albums",
-        h("p", { class: "muted" }, "Where this package's tracks are sorted, under Artists. If the tags got it wrong, set the artist and album here."),
+        h("p", { class: "muted" }, "Where this package's tracks are sorted, under Artists. If the tags got it wrong, set the artist, album and year here."),
         albums({ id: "package-albums", groups, onSave: onSetAlbum, onError }),
       ),
     section(

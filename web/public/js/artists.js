@@ -8,6 +8,9 @@ import { entrySort, entryTags, sortLibrary, sortTarget, treeChanges } from "./so
 
 export const ARTISTS = ["artists"];
 
+/** Whether `path` (from the root) is an artist's folder: the one its albums are in. */
+export const isArtistFolder = (path) => path.length === 2 && path[0] === ARTISTS[0];
+
 /** `tx` with the paths below `at` removed and the entries put, as treeChanges gives them. */
 const applied = (tx, at, { remove, put }) =>
   writeAll(tx, [...remove.map((path) => (t) => t.remove([...at, ...path])), ...put.map(({ path, entry }) => (t) => t.put([...at, ...path], entry))]);

@@ -92,15 +92,63 @@ export function entryTags(entry) {
   return {
     ...NO_TAGS,
     ...Object.fromEntries(["title", "artist", "albumArtist", "album"].map((key) => [key, text(tags[key])])),
-    ...Object.fromEntries(["track", "trackTotal", "disc", "discTotal", "year"].map((key) => [key, number(tags[key])])),
+    ...Object.fromEntries(["track", "trackTotal", "disc", "discTotal", "year", "originalYear"].map((key) => [key, number(tags[key])])),
   };
 }
 
-/** What the user set for an entry's sorting (`app.sort`): { artist, album }, either or both. */
+/** What the user set for an entry's sorting (`app.sort`): { artist, album, year }, any of them. */
 export function entrySort(entry) {
   const sort = entry.app?.sort ?? {};
-  return Object.fromEntries(["artist", "album"].filter((key) => typeof sort[key] === "string" && sort[key].trim()).map((key) => [key, sort[key]]));
+  return {
+    ...Object.fromEntries(["artist", "album"].filter((key) => typeof sort[key] === "string" && sort[key].trim()).map((key) => [key, sort[key]])),
+    ...(isYear(sort.year) ? { year: sort.year } : {}),
+  };
 }
+
+// ---------------------------------------------------------------- years
+
+/** Whether `value` is a year as tags and the user give one: four digits. */
+const isYear = (value) => Number.isSafeInteger(value) && value >= 1000 && value <= 9999;
+
+/** A year as typed: four digits, else null (nothing, or not a year). */
+export function typedYear(text) {
+  const match = /^\s*(\d{4})\s*$/.exec(String(text ?? ""));
+  return match ? Number(match[1]) : null;
+}
+
+/** "1999 - First", "(1999) First", "[1999] First": a year a discography's folder starts with. */
+const NAMED_YEAR = /^[([]?((?:19|20)\d\d)[)\]]?(?:\s*[-–.:_]\s*|\s+)\S/;
+
+/** The year an album's name starts with, as discographies name their folders; null when it doesn't. */
+export function yearInName(name) {
+  const match = NAMED_YEAR.exec(name);
+  return match ? Number(match[1]) : null;
+}
+
+/** The year most of `years` say, the earliest of a tie; null for none. */
+function mostSaid(years) {
+  const counts = [...Map.groupBy(years, (year) => year)].map(([year, said]) => ({ year, count: said.length }));
+  return counts.reduce((best, next) => (best === null || next.count > best.count || (next.count === best.count && next.year < best.year) ? next : best), null)?.year ?? null;
+}
+
+/**
+ * The year of the album `name`, from its tracks ([{ tags, sort }]): the year the user set, else their original
+ * release year (a reissue's tags say both), else their year, the one most of them say; else the year its name starts
+ * with ("1999 - First"); null when nothing says.
+ */
+export function albumYear(tracks, name) {
+  const said = [(track) => track.sort?.year, (track) => track.tags.originalYear, (track) => track.tags.year]
+    .map((of) => tracks.map(of).filter(isYear))
+    .find((years) => years.length > 0);
+  return said ? mostSaid(said) : yearInName(name);
+}
+
+/** The years of an artist's albums: `albums` as [{ name, entries }], the entries in each folder → Map(name → year or null). */
+export const albumYears = (albums) =>
+  new Map(albums.map(({ name, entries }) => [name, albumYear(entries.filter((entry) => entry.kind === "file").map((entry) => ({ tags: entryTags(entry), sort: entrySort(entry) })), name)]));
+
+/** An artist's folder as shown: its albums newest first by `years` (albumYears), those of no known year last, each as they came. */
+export const byYear = (entries, years) => entries.toSorted((a, b) => (years.get(b.name) ?? 0) - (years.get(a.name) ?? 0));
 
 /** The artist a track (an entry, or library.js's trackOf) shows: its artist, else its album artist, else the one the user set; "" for none. */
 export function artistOf(entry) {
@@ -112,30 +160,43 @@ export function artistOf(entry) {
 export const packageTracks = (files) =>
   files.filter(({ entry }) => entry.kind === "file" && isTrack({ name: entry.name, type: typeOfEntry(entry) })).map(({ path, entry }) => ({ path, entry, tags: entryTags(entry), sort: entrySort(entry) }));
 
-/** The albums targets go to, in the order they first come: [{ artist, album, tracks }]. */
-export function albumGroups(targets) {
-  const groups = Map.groupBy(targets, ({ artist, album }) => JSON.stringify([artist, album]));
-  return [...groups.values()].map((members) => ({ artist: members[0].artist, album: members[0].album, tracks: members.length }));
+/**
+ * The albums `targets` go to, in the order they first come: [{ artist, album, year, tracks }]. `files` are the tracks
+ * the targets are of ([{ tags, sort }]), for the year (albumYear).
+ */
+export function albumGroups(targets, files) {
+  const groups = Map.groupBy(targets.map((target, i) => ({ target, file: files[i] })), ({ target }) => JSON.stringify([target.artist, target.album]));
+  return [...groups.values()].map((members) => {
+    const { artist, album } = members[0].target;
+    return { artist, album, year: albumYear(members.map(({ file }) => file), album), tracks: members.length };
+  });
 }
 
 /**
  * The files of a package after the user sets the album `group` ({ artist, album }, as albumGroups gives it) to `to`
- * ({ artist, album }, as typed). Each track of the group keeps a `sort` only where `to` differs from what its tags and
- * folders say by themselves, so an empty field, or one set back, goes back to that.
+ * ({ artist, album, year }, as typed). Each track of the group keeps a `sort` only where `to` differs from what its
+ * tags and folders say by themselves, so an empty field, or one set back, goes back to that.
  */
 export function regroup({ packageName, files, group, to }) {
   const targets = packageTargets({ packageName, files });
   const own = packageTargets({ packageName, files: files.map((file) => ({ ...file, sort: {} })) });
+  const inGroup = files.map((_, i) => targets[i].artist === group.artist && targets[i].album === group.album);
   const wanted = (text, auto) => {
     const name = text.trim() ? folderName(text.trim(), auto) : auto;
     return name === auto ? null : text.trim();
   };
-  return files.map((file, i) => {
-    if (targets[i].artist !== group.artist || targets[i].album !== group.album) return file;
+  const moved = files.map((file, i) => {
+    if (!inGroup[i]) return file;
     const artist = wanted(to.artist, own[i].artist);
     const album = wanted(to.album, own[i].album);
     return { ...file, sort: { ...(artist ? { artist } : {}), ...(album ? { album } : {}) } };
   });
+  // The year is the album's: kept on each of its tracks, unless its tracks and its name, where it now goes, say it.
+  const first = inGroup.indexOf(true);
+  if (first < 0) return moved;
+  const year = typedYear(to.year);
+  const auto = albumYear(moved.filter((_, i) => inGroup[i]), packageTargets({ packageName, files: moved })[first].album);
+  return year === null || year === auto ? moved : moved.map((file, i) => (inGroup[i] ? { ...file, sort: { ...file.sort, year } } : file));
 }
 
 // ---------------------------------------------------------------- the artists/ tree

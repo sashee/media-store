@@ -61,6 +61,16 @@ test("ID3v2.4: UTF-8, syncsafe frame sizes, a date for the year, the album artis
   assert.deepEqual(await tags(mp3(v2)), expected({ title: "Old", track: 7 }));
 });
 
+test("the original release year: ID3v2.4's TDOR, v2.3's TORY, v2.2's TOR, and Vorbis's ORIGINALDATE or ORIGINALYEAR", async () => {
+  const v4 = id3(4, [id3Frame(4, "TDRC", concat(bytes(3), te.encode("2011-09-26"))), id3Frame(4, "TDOR", concat(bytes(3), te.encode("1973-03-01")))]);
+  assert.deepEqual(await tags(mp3(v4)), expected({ year: 2011, originalYear: 1973 }));
+  const v3 = id3(3, [id3Frame(3, "TYER", concat(bytes(0), ascii("2011"))), id3Frame(3, "TORY", concat(bytes(0), ascii("1973")))]);
+  assert.deepEqual(await tags(mp3(v3)), expected({ year: 2011, originalYear: 1973 }));
+  const v2 = id3(2, [id3Frame(2, "TOR", concat(bytes(0), ascii("1973")))]);
+  assert.deepEqual(await tags(mp3(v2)), expected({ originalYear: 1973 }));
+  assert.deepEqual(tagsOf({ date: "2011", originalDate: "1973-03-01" }), expected({ year: 2011, originalYear: 1973 }));
+});
+
 test("ID3v1 at the end, with v1.1's track number, when there is nothing at the start", async () => {
   const field = (text, length) => concat(ascii(text), new Uint8Array(length - text.length));
   const v1 = concat(ascii("TAG"), field("Song", 30), field("Band", 30), field("Album", 30), ascii("1999"), field("comment", 28), bytes(0, 4), bytes(12));
@@ -85,6 +95,13 @@ test("FLAC: the Vorbis comment block, after a big picture, read on its own", asy
   const read = file(flac);
   assert.deepEqual(await readTags(read), expected({ title: "Sonne", artist: "Rammstein", albumArtist: "Rammstein", album: "Mutter", track: 2, trackTotal: 11, disc: 1, year: 2001 }));
   assert.ok(read.reads.every(([start, end]) => end - start < 100_000), "the picture isn't read");
+});
+
+test("Vorbis comments: ORIGINALDATE, else ORIGINALYEAR, for the original release year", async () => {
+  const block = (type, data, last = false) => concat(bytes((last ? 0x80 : 0) | type, data.length >> 16, (data.length >> 8) & 255, data.length & 255), data);
+  const of = (...comments) => concat(ascii("fLaC"), block(0, new Uint8Array(34)), block(4, vorbisComment(...comments), true), new Uint8Array(1000));
+  assert.deepEqual(await tags(of("DATE=2011", "ORIGINALDATE=1973-03-01")), expected({ year: 2011, originalYear: 1973 }));
+  assert.deepEqual(await tags(of("ORIGINALYEAR=1973")), expected({ originalYear: 1973 }));
 });
 
 /** Ogg pages carrying `packets`, cut into segments of up to 255 bytes, one page per `perPage` segments. */
