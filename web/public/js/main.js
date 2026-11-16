@@ -26,7 +26,7 @@ import { aheadBytes, forgetReads, nearEnd, NEXT_START_BYTES, playingNow, startPl
 import { offer, readWhole } from "./saving.js";
 import { rangeResponse } from "./ranges.js";
 import { connectMediaSession, showTrack } from "./media-session.js";
-import { after, nextRepeat, previous, queueOf, REPEAT_MODES, shuffleOrder, skipping, statusLine } from "./queue.js";
+import { after, nextRepeat, previous, queueOf, REPEAT_MODES, shuffleOrder, skipping, startOf, statusLine } from "./queue.js";
 import { formatRate, formatUsage, MINUTE_MS, plus, rate, recent, sampleOf, total } from "./traffic.js";
 import * as requestCounter from "./requests.js";
 import { h, replaceChildren } from "./ui/dom.js";
@@ -178,9 +178,9 @@ const refreshLoudness = async () => {
   loudness = readLoudness(await fileNow(LOUDNESS));
 };
 
-/** Where Play all and Play likes start: the first track not disliked. */
+/** Where Play all and Play likes start: the first track not disliked, or a random one when shuffling. */
 const firstPlayable = (tracks) => {
-  const first = tracks.find((track) => !skipped(track));
+  const first = startOf(tracks, skipped, mode.shuffle, Math.random);
   if (!first) throw new UserFacingError("Everything here is disliked: started on purpose, a track still plays.");
   return first;
 };

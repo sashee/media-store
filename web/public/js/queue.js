@@ -56,6 +56,16 @@ export function shuffleOrder(tracks, current, random) {
   return [...(tracks.some((track) => track.name === current) ? [current] : []), ...shuffled(rest, random)];
 }
 
+/**
+ * Where playing a whole list starts (Play all, Play likes): its first track `skipped` says yes to, or a random one of
+ * them when shuffling; null when it says no to every one.
+ */
+export function startOf(tracks, skipped, shuffle, random) {
+  const playable = tracks.filter((track) => !skipped(track));
+  if (playable.length === 0) return null;
+  return playable[shuffle ? Math.floor(random() * playable.length) : 0];
+}
+
 /** A shuffled `order` kept up with the library: tracks gone are dropped, new ones go at the end. */
 export function keptOrder(order, tracks) {
   const names = new Set(tracks.map((track) => track.name));

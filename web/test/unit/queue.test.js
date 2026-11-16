@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { secondLine } from "../../public/js/media-session.js";
-import { after, keptOrder, nextRepeat, previous, queueOf, REPEAT_MODES, RESTART_AFTER_S, shuffled, shuffleOrder, skipping, statusLine } from "../../public/js/queue.js";
+import { after, keptOrder, nextRepeat, previous, queueOf, REPEAT_MODES, RESTART_AFTER_S, shuffled, shuffleOrder, skipping, startOf, statusLine } from "../../public/js/queue.js";
 
 const queue = ["a", "b", "c"].map((name) => ({ name }));
 
@@ -46,6 +46,15 @@ test("shuffling: every track once, in the order random() says, starting with the
   assert.equal(order[0], "c");
   assert.deepEqual([...order].sort(), ["a", "b", "c", "d"]);
   assert.deepEqual([...shuffleOrder(tracks, null, Math.random)].sort(), ["a", "b", "c", "d"], "nothing playing: all of them shuffled");
+});
+
+test("playing a whole list starts with its first track not skipped, or a random one when shuffling", () => {
+  const tracks = ["a", "b", "c", "d"].map((name) => ({ name }));
+  const skipped = (track) => track.name === "a" || track.name === "c";
+  assert.equal(startOf(tracks, skipped, false, numbers(0.99)).name, "b", "not shuffled: the first, whatever random() says");
+  assert.equal(startOf(tracks, skipped, true, numbers(0)).name, "b");
+  assert.equal(startOf(tracks, skipped, true, numbers(0.99)).name, "d", "shuffled: any of them, never a skipped one");
+  assert.equal(startOf(tracks, () => true, true, Math.random), null, "every one skipped: none");
 });
 
 test("a shuffled order keeps up with the library: tracks gone are dropped, new ones go at the end", () => {
