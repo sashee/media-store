@@ -4,6 +4,6 @@
   pkgs ? import ./pkgs.nix { },
 }:
 let
-  nixosTest = fetchTarball "https://github.com/sashee/nixos-test/archive/898042c213814d474891ad24358fef7b6cf823d9.tar.gz";
+  nixosTest = fetchTarball "https://github.com/sashee/nixos-test/archive/52e57e0d662534d5c26bb896569a6bc56d1e6005.tar.gz";
 in
 pkgs.callPackage "${nixosTest}/packages/iroh-ssh/package.nix" { }
