@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Don't leave a token in .git; nothing here pushes.
           persist-credentials: false
@@ -42,7 +42,7 @@ jobs:
           df -h
 
       - name: Install Nix
-        uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31.10.7
+        uses: cachix/install-nix-action@bb0495a1086c46893eee56f32fd192dfe4a15bb9 # v32.0.0
 
       # Both packages and every check, in the Nix sandbox: e2ee-store's Rust suite (in the backend's build), the
       # frontend's unit tests, the browser tests (Chromium with a PRF-capable virtual authenticator: playback, upload,
