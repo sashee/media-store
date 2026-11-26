@@ -4,6 +4,6 @@
 # Everything else imports this file and only uses paths inside it. To work on e2ee-store at the same time, see
 # the Makefile (BACKEND, SDK) for the development loop.
 fetchTarball {
-  url = "https://github.com/sashee/e2ee-store/archive/ee85f8c8b6de7dda66786893e231730df4b28d6b.tar.gz";
-  sha256 = "0x1c4fdi09lnfdw0r9f49j3skzn7bdmh0v24dljpghbzkqgbh437";
+  url = "https://github.com/sashee/e2ee-store/archive/07afcba301adeeabfb98a9deae52123e34c9762d.tar.gz";
+  sha256 = "1a4c7yawk1lm4mx4iq737lifvj7by2vnm09dsnqswf49v85m4ap9";
 }
